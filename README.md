@@ -160,6 +160,41 @@ Channels are chosen purely by which secrets exist:
 gh workflow run 'Bill reminders' --repo <you>/steward-data
 ```
 
+## Importing a card statement
+
+**History → Import.** Takes a statement as **CSV, Excel (.xlsx) or PDF**, and reads
+it entirely on the phone — the file is never uploaded anywhere.
+
+- **Excel** needs no library. An `.xlsx` is a ZIP of XML and Safari can inflate
+  raw-deflate natively, so `statement.js` reads the zip, `sharedStrings.xml` and
+  the sheet directly — including consulting `styles.xml` to tell a real date cell
+  from a plain number, since on the wire both are just serials.
+- **PDF** uses vendored pdf.js (~1.7MB, loaded only when you pick a PDF). A PDF has
+  no tables, only glyphs at coordinates, so rows are rebuilt by grouping text on
+  its baseline and splitting columns on wide horizontal gaps.
+- **CSV** handles quoted fields, tabs and semicolons.
+
+It then works out each transaction positionally rather than by header, because
+statements rarely have usable ones:
+
+- **Payments, refunds, reversals and totals are skipped** — those aren't spending
+- **Credits** (`CR`, a leading minus, or bracketed) are recognised and excluded
+- **Two date columns** (transaction and posting) are consumed together, so the
+  second one doesn't end up glued to the description
+- **Split thousands are repaired** — banks emit `4,820.00` unquoted, which splits
+  into `4` and `820.00`. Repair only runs on rows *wider than the table's usual
+  width*, so a genuine `4` beside `820.00` in an amount-and-balance layout is left
+  alone.
+- **Categories are guessed** from the merchant, reusing the receipt-scanner's rules
+
+**Charges are matched against your bills.** A statement line that looks like a
+monthly bill, for a similar amount, marks that bill paid — for the month of the
+charge, not today, so a July charge settles July even if August is already paid.
+
+Nothing imports without a preview, and every charge carries a fingerprint of its
+date, description and amount. Re-importing an overlapping statement recognises
+what it has already seen and imports only what's new.
+
 ## How sync works
 
 The ledger is an append-only event log. Each phone appends immutable, uniquely-IDed
@@ -188,9 +223,10 @@ the update up.
 index.html            markup for all five views
 app.js                event log, crypto vault, sync, bills, receipts, rendering
 ocr.js                image preprocessing, Tesseract, receipt parsing
+statement.js          CSV / XLSX / PDF readers and transaction extraction
 styles.css            iOS-flavoured styling, light + dark
-sw.js                 offline shell cache (vendor/ cached on first scan, not precached)
-vendor/               Tesseract runtime + English model, ~5.8MB
+sw.js                 offline shell cache (vendor/ cached on demand, not precached)
+vendor/               Tesseract + English model, pdf.js — ~7.5MB, all lazy-loaded
 reminders/            the daily bill-reminder job, installed into the data repo
 deploy.sh             creates both repos, pushes, enables Pages
 setup-reminders.sh    installs the reminder workflow + prints secret setup

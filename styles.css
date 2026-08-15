@@ -330,9 +330,12 @@ button { background: none; border: 0; cursor: pointer; }
   text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .4px;
   color: var(--txt-2); padding: 0 8px 7px 0; font-weight: 600;
 }
-.preview-table td { padding: 7px 8px 7px 0; border-top: .5px solid var(--sep); }
+.preview-table td { padding: 7px 8px 7px 0; border-top: .5px solid var(--sep); vertical-align: top; }
+.preview-table td:first-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .preview-table td:last-child, .preview-table th:last-child { text-align: right; padding-right: 0; }
 .row-bad td { color: var(--red); }
+.row-muted td { opacity: .42; }
+.bad-note { color: var(--red); }
 .prev-grp { font-size: 11px; color: var(--txt-3); text-transform: uppercase; letter-spacing: .3px; }
 .preview-total {
   display: flex; justify-content: space-between; gap: 10px;

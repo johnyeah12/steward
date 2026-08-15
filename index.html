@@ -192,10 +192,11 @@
   <section id="v-hist" class="view hidden">
     <header class="hdr">
       <div class="hdr-row">
-        <span class="hdr-btn hdr-ghost"></span>
+        <button id="histImport" class="hdr-btn">Import</button>
         <h2 class="hdr-title">History</h2>
         <button id="histExport" class="hdr-btn">Export</button>
       </div>
+      <input id="stmtInput" type="file" accept=".csv,.tsv,.txt,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
       <input id="histSearch" class="search" type="search" placeholder="Search notes and categories" autocapitalize="off">
     </header>
     <div class="scroll">
@@ -298,6 +299,7 @@
 </div>
 
 <script src="ocr.js"></script>
+<script src="statement.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

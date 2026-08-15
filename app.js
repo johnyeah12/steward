@@ -1138,6 +1138,150 @@ function openBillSheet(billId) {
   };
 }
 
+/* ── import a card statement (CSV / Excel / PDF) ── */
+
+/** Stable per-charge key so re-importing an overlapping statement is a no-op. */
+const stmtKey = (date, desc, amtCents) =>
+  `${date}|${String(desc).toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 24)}|${amtCents}`;
+
+/** Does this charge look like one of the monthly bills?
+    `mk` must be the month of the CHARGE, not today — a July charge settles the
+    July bill, and August's may legitimately still be outstanding. */
+function matchBill(desc, amtCents, bills, txns, mk) {
+  const d = String(desc).toLowerCase();
+  let best = null;
+  for (const b of bills) {
+    if (!b.amt) continue;
+    const words = String(b.name).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3);
+    if (!words.length) continue;
+    const hits = words.filter(w => d.includes(w)).length;
+    if (!hits) continue;
+    const close = Math.abs(b.amt - amtCents) <= Math.max(200, b.amt * 0.05);
+    const score = hits / words.length + (close ? 1 : 0);
+    if (score >= 0.75 && (!best || score > best.score)) best = { bill: b, score, close };
+  }
+  if (!best) return null;
+  if (billStatus(best.bill, txns, mk).state === 'paid') return null;   // already handled
+  return best.bill;
+}
+
+function openStatementSheet() {
+  $('#sheetBody').innerHTML = `
+    <h3 class="sheet-title">Import a statement</h3>
+    <p class="sheet-sub">A card statement as CSV, Excel or PDF. It's read on this phone — the file is never uploaded anywhere.</p>
+    <button id="stmtPick" class="btn btn-primary">Choose a file</button>
+    <div id="stmtOut"></div>
+    <div style="height:10px"></div>
+    <button id="stmtClose" class="btn btn-secondary">Cancel</button>`;
+  $('#sheet').classList.remove('hidden');
+  $('#stmtClose').onclick = closeSheet;
+  $('#stmtPick').onclick = () => $('#stmtInput').click();
+}
+
+async function onStatementFile(file) {
+  if (!file) return;
+  const out = $('#stmtOut');
+  out.innerHTML = `<div style="height:16px"></div><div class="card"><div class="scan-spinner"></div>
+    <p id="stmtMsg" class="scan-msg" style="text-align:center">Reading…</p>
+    <div class="bar"><div id="stmtBar" class="bar-fill" style="width:8%"></div></div></div>`;
+
+  const progress = (msg, p) => {
+    if ($('#stmtMsg')) $('#stmtMsg').textContent = msg;
+    if ($('#stmtBar')) $('#stmtBar').style.width = Math.round(p * 100) + '%';
+  };
+
+  let rows, kind;
+  try {
+    ({ rows, kind } = await Statement.read(file, progress));
+  } catch (e) {
+    out.innerHTML = `<div style="height:16px"></div><p class="card-note bad-note">${escapeHtml(e.message || 'Could not read that file')}</p>`;
+    $('#stmtInput').value = '';
+    return;
+  }
+
+  const unit = ZERO_DP.has(S.cfg.cur) ? 1 : 100;
+  const { txns, bills } = reduceLog();
+  const seen = new Set(txns.filter(t => t.sk).map(t => t.sk));
+
+  const found = Statement.extract(rows, { year: new Date().getFullYear() });
+  const claimed = new Set();          // one charge per bill per month
+  for (const r of found) {
+    r.cents = Math.round(r.amount * unit);
+    r.sk = stmtKey(r.date, r.desc, r.cents);
+    r.dup = seen.has(r.sk);
+    r.cat = (typeof OCR !== 'undefined' && OCR.parse) ? (OCR.parse(r.desc, todayISO()).category || 'misc') : 'misc';
+    r.use = !r.skip && !r.dup;
+    r.bill = null;
+    if (r.use) {
+      const b = matchBill(r.desc, r.cents, bills, txns, monthKey(r.date));
+      if (b && !claimed.has(b.id + monthKey(r.date))) {
+        r.bill = b;
+        claimed.add(b.id + monthKey(r.date));
+      }
+    }
+  }
+
+  const usable = found.filter(r => r.use);
+  const skipped = found.filter(r => r.skip).length;
+  const dupes = found.filter(r => r.dup).length;
+  const matched = usable.filter(r => r.bill).length;
+  const total = usable.reduce((s, r) => s + r.cents, 0);
+
+  if (!found.length) {
+    out.innerHTML = `<div style="height:16px"></div>
+      <p class="card-note bad-note">Read the ${kind} but found no transactions in it — ${rows.length} rows of text.
+      If it's a PDF that's a scan rather than real text, export CSV from your bank instead.</p>`;
+    $('#stmtInput').value = '';
+    return;
+  }
+
+  out.innerHTML = `
+    <div style="height:16px"></div>
+    <div class="card">
+      <div class="card-head">${usable.length} to import · from ${kind}</div>
+      <div class="preview-wrap">
+        <table class="preview-table">
+          <thead><tr><th>Date</th><th>Description</th><th>Amount</th></tr></thead>
+          <tbody>${found.map((r, i) => `
+            <tr class="${r.use ? '' : 'row-muted'}">
+              <td>${r.date.slice(5)}</td>
+              <td>${escapeHtml(r.desc.slice(0, 34))}${r.bill ? `<br><span class="prev-grp">matches ${escapeHtml(r.bill.name)}</span>`
+                    : r.dup ? '<br><span class="prev-grp">already imported</span>'
+                    : r.skip ? '<br><span class="prev-grp">not a charge</span>' : ''}</td>
+              <td>${r.use ? `${(CAT[r.cat] || CAT.misc).e} ${money(r.cents)}` : money(r.cents)}</td>
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>
+      <div class="preview-total"><span>Total to import</span><span>${money(total)}</span></div>
+      ${matched ? `<div class="preview-total"><span>Matched to bills</span><span>${matched}</span></div>` : ''}
+    </div>
+    ${skipped || dupes ? `<p class="card-note">${[
+        skipped ? `${skipped} skipped as payments, refunds or totals` : '',
+        dupes ? `${dupes} already imported` : ''].filter(Boolean).join(' · ')}.</p>` : ''}
+    ${usable.length ? `<button id="stmtGo" class="btn btn-primary">Import ${usable.length} charge${usable.length === 1 ? '' : 's'}</button>` : '<p class="card-note">Nothing new to import.</p>'}`;
+
+  $('#stmtInput').value = '';
+  if (!usable.length) return;
+
+  $('#stmtGo').onclick = () => {
+    for (const r of usable) {
+      appendEvent({
+        k: 'add',
+        x: {
+          id: uid(), amt: r.cents, cat: r.bill ? (r.bill.cat || 'bill') : r.cat,
+          note: r.desc.slice(0, 60), date: r.date,
+          payer: r.bill ? r.bill.payer : iAm(),
+          split: r.bill ? r.bill.split : 'both',
+          sk: r.sk, ...(r.bill ? { bill: r.bill.id } : {}),
+        },
+      });
+    }
+    closeSheet();
+    toast(`${usable.length} imported${matched ? `, ${matched} bill${matched === 1 ? '' : 's'} marked paid` : ''}`);
+    render(); sync();
+  };
+}
+
 /* ── paste a whole table of bills ── */
 
 function openPasteSheet() {
@@ -1424,6 +1568,8 @@ function wireEvents() {
   // history
   $('#histSearch').addEventListener('input', e => { S.histQuery = e.target.value; renderHistory(); });
   $('#histExport').addEventListener('click', exportCsv);
+  $('#histImport').addEventListener('click', openStatementSheet);
+  $('#stmtInput').addEventListener('change', e => onStatementFile(e.target.files && e.target.files[0]));
   $('#histList').addEventListener('click', e => {
     const b = e.target.closest('.hist-item'); if (b) openSheet(b.dataset.id);
   });
