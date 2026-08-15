@@ -30,6 +30,35 @@ const CATS = [
 ];
 const CAT = Object.fromEntries(CATS.map(c => [c.k, c]));
 
+/* ── learning where a merchant belongs ──
+   Card descriptors carry per-transaction noise — order refs, store numbers,
+   city and country tags — so "AMAZON MKTPL*2M1GT0J SEATTLE US" and
+   "AMAZON MKTPL*418O55J SEATTLE US" must reduce to the same merchant. */
+
+const KEY_NOISE = /^(HK|US|SG|PH|CN|GB|JP|AU|NL|IE|SE|HONG|KONG|SINGAPORE|LTD|LIMITED|INC|CO|COM|THE|AND|PTE|PTY|INTL|INTERNATIONAL|INDEX|INDEXES|CITY|STORE|SHOP|BRANCH|PENDING)$/;
+// Only true pass-throughs, where the merchant follows the prefix. "DASH" and
+// "WeChat Pay" are stripped when guessing a category but NOT here — for keying
+// they are the most identifying thing in the descriptor.
+const PROC_PREFIX = /^(?:pp\*|paypal\s*\*|2c2p\*|kpay\w*\*|alipayhk\*|alipay\*|fp\*|pym\*|sq\s*\*|tst\*|www\.)/i;
+
+function merchantKey(note) {
+  const words = String(note || '')
+    .replace(PROC_PREFIX, ' ')
+    .toUpperCase()
+    .replace(/[^A-Z ]+/g, ' ')          // digits and punctuation are noise
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !KEY_NOISE.test(w));
+  if (!words.length) return '';
+  // one distinctive word is usually the merchant; pair up short ones
+  return (words[0].length >= 5 ? words.slice(0, 1) : words.slice(0, 2)).join(' ');
+}
+
+/** A category the two of you have taught, for this merchant. */
+function learnedCat(note) {
+  const k = merchantKey(note);
+  return k ? (S.rules && S.rules.get(k)) || null : null;
+}
+
 /** Built-ins plus any category the two of you have added. */
 function allCats() {
   return [...CATS, ...(S.customCats || [])];
@@ -219,6 +248,7 @@ function reduceLog() {
   const map = new Map();
   const bmap = new Map();
   const cmap = new Map();
+  const rmap = new Map();
 
   for (const e of evs) {
     if (e.k === 'add')    map.set(e.x.id, { ...e.x, _born: e.t });
@@ -226,6 +256,7 @@ function reduceLog() {
     else if (e.k === 'del')  map.delete(e.x);
     else if (e.k === 'catadd') cmap.set(e.x.k, { ...e.x });
     else if (e.k === 'catdel') cmap.delete(e.x);
+    else if (e.k === 'rule')   rmap.set(e.x.key, e.x.cat);   // later rules win
     else if (e.k === 'badd')  bmap.set(e.x.id, { ...e.x });
     else if (e.k === 'bedit') { const cur = bmap.get(e.x); if (cur) bmap.set(e.x, { ...cur, ...e.p }); }
     else if (e.k === 'bdel')  bmap.delete(e.x);
@@ -236,7 +267,8 @@ function reduceLog() {
   const bills = [...bmap.values()].sort((x, y) =>
     (x.seq ?? 1e9) - (y.seq ?? 1e9) || (x.name > y.name ? 1 : -1));
   S.customCats = [...cmap.values()];
-  return { txns, bills, cats: S.customCats };
+  S.rules = rmap;
+  return { txns, bills, cats: S.customCats, rules: rmap };
 }
 
 /* ───────────────────────── Bills ───────────────────────── */
@@ -756,7 +788,7 @@ function renderCatDetail(k, txns) {
   if (!rows.length) return '';
   const isOther = k === 'misc';
   return `<div class="chart-detail">
-    ${isOther ? `<p class="detail-hint">These couldn't be worked out from the merchant name. Tap any one to file it.</p>` : ''}
+    ${isOther ? `<p class="detail-hint">These couldn't be worked out from the merchant name. File one and every other entry from that shop moves with it — this month and every other — and it'll be remembered next time.</p>` : ''}
     ${rows.map(t => `
       <div class="detail-row" role="button" tabindex="0" data-txn="${t.id}">
         <span class="detail-name">${escapeHtml(t.note || catOf(t.cat).n)}</span>
@@ -981,7 +1013,8 @@ async function onScanFile(file) {
             : (Number.isInteger(r.amount) ? String(r.amount) : r.amount.toFixed(2));
     }
     if (r.merchant && !d.note) d.note = r.merchant;
-    if (r.category) d.cat = r.category;
+    const learned = r.merchant ? learnedCat(r.merchant) : null;
+    if (learned || r.category) d.cat = learned || r.category;
     if (r.date) d.date = r.date;
 
     paintAdd();
@@ -1165,10 +1198,42 @@ function openCategorySheet(txnId) {
   };
 }
 
+/**
+ * File one expense — and remember the decision.
+ *
+ * Filing is treated as teaching, not a one-off correction: the merchant is
+ * learned so future imports land in the right place, and every other entry
+ * from that merchant is swept up too, whatever month it sits in. Only entries
+ * that are still unfiled, or that shared the same old category, are moved —
+ * a category set by hand is never overwritten.
+ */
 function applyCategory(txnId, cat, msg) {
+  const { txns } = reduceLog();
+  const t = txns.find(x => x.id === txnId);
+  if (!t) return;
+
+  const key = merchantKey(t.note);
+  const prev = t.cat;
+
   appendEvent({ k: 'edit', x: txnId, p: { cat } });
+  if (key) appendEvent({ k: 'rule', x: { key, cat } });
+
+  let swept = 0;
+  if (key) {
+    for (const o of txns) {
+      if (o.id === txnId || o.cat === cat) continue;
+      if (o.cat !== 'misc' && o.cat !== prev) continue;   // leave hand-filed ones alone
+      if (merchantKey(o.note) !== key) continue;
+      appendEvent({ k: 'edit', x: o.id, p: { cat } });
+      swept++;
+    }
+  }
+
   closeSheet();
-  toast(msg || `Filed under ${catOf(cat).n}`);
+  const name = catOf(cat).n;
+  toast(msg ? `${msg}${swept ? ` · ${swept} more moved` : ''}`
+            : swept ? `${swept + 1} entries filed under ${name}`
+                    : `Filed under ${name}`);
   haptic();
   render();
   sync();
@@ -1318,7 +1383,10 @@ async function onStatementFile(file) {
     occurrence.set(base, n);
     r.sk = n > 1 ? `${base}#${n}` : base;
     r.dup = seen.has(r.sk);
-    r.cat = (typeof OCR !== 'undefined' && OCR.parse) ? (OCR.parse(r.desc, todayISO()).category || 'misc') : 'misc';
+    // what you've taught wins over the built-in merchant rules
+    r.cat = learnedCat(r.desc)
+         || ((typeof OCR !== 'undefined' && OCR.parse) ? OCR.parse(r.desc, todayISO()).category : null)
+         || 'misc';
     r.use = !r.skip && !r.dup;
     r.bill = null;
     if (r.use) {
