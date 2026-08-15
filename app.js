@@ -1329,7 +1329,20 @@ async function boot() {
 
   // ?nosw disables the offline cache — only used while developing.
   if ('serviceWorker' in navigator && !location.search.includes('nosw')) {
-    try { await navigator.serviceWorker.register('sw.js'); } catch { /* offline shell just won't cache */ }
+    try {
+      // If a worker was already in charge, a new one taking over means a new
+      // build landed — reload once so the phone shows it straight away instead
+      // of waiting for a future launch.
+      const hadController = !!navigator.serviceWorker.controller;
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadController || reloading) return;
+        reloading = true;
+        location.reload();
+      });
+      const reg = await navigator.serviceWorker.register('sw.js');
+      reg.update().catch(() => { /* offline — nothing to check against */ });
+    } catch { /* offline shell just won't cache */ }
   }
 }
 

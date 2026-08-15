@@ -54,6 +54,13 @@ else
 fi
 
 cd "$HERE"
+
+# Stamp the service-worker cache name so installed phones actually pick this
+# build up. Without a fresh name the old shell keeps being served.
+STAMP="steward-$(date +%Y%m%d%H%M%S)"
+/usr/bin/sed -i '' -E "s/^const VERSION = '[^']*';/const VERSION = '$STAMP';/" sw.js
+ok "service worker cache stamped $STAMP"
+
 [ -d .git ] || { git init -q; git branch -M main; }
 cat > .gitignore <<'EOF'
 .DS_Store

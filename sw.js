@@ -2,7 +2,9 @@
    instantly and works with no signal. Data never passes through here:
    GitHub API calls are left entirely alone. */
 
-const VERSION = 'steward-v2';
+// Bumped automatically by deploy.sh — a stale value here is why an installed
+// phone keeps serving the previous build.
+const VERSION = 'steward-20260815235004';
 const SHELL = [
   './',
   './index.html',
