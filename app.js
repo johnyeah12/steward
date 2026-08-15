@@ -22,6 +22,7 @@ const CATS = [
   { k: 'heal', e: '💊', n: 'Health'     },
   { k: 'fun',  e: '🎬', n: 'Fun'        },
   { k: 'trip', e: '✈️', n: 'Travel'     },
+  { k: 'give', e: '🙏', n: 'Giving'     },
   { k: 'gift', e: '🎁', n: 'Gifts'      },
   { k: 'pers', e: '💅', n: 'Personal'   },
   { k: 'kids', e: '👶', n: 'Kids'       },
@@ -664,20 +665,7 @@ function renderHome() {
     btn.classList.remove('hidden');
   }
 
-  // category breakdown
-  const byCat = new Map();
-  for (const t of mt) byCat.set(t.cat, (byCat.get(t.cat) || 0) + t.amt);
-  const cats = [...byCat.entries()].sort((x, y) => y[1] - x[1]);
-  const max = cats.length ? cats[0][1] : 1;
-  $('#catBreakdown').innerHTML = cats.length ? cats.map(([k, v]) => `
-    <div class="cat-row">
-      <div class="cat-emoji">${(CAT[k] || CAT.misc).e}</div>
-      <div class="cat-mid">
-        <div class="cat-name">${(CAT[k] || CAT.misc).n}</div>
-        <div class="cat-bar"><div class="cat-fill" style="width:${Math.max(4, (v / max) * 100)}%"></div></div>
-      </div>
-      <div class="cat-amt">${money(v)}</div>
-    </div>`).join('') : `<div class="empty">Nothing logged yet</div>`;
+  renderCatChart(mt, total);
 
   // who paid
   const paid = { a: 0, b: 0 };
@@ -724,6 +712,54 @@ function renderHistory() {
         </button>`).join('')}</div>
     </div>`;
   }).join('');
+}
+
+/**
+ * Where the month's money went, as ranked bars.
+ *
+ * Bars, not a pie: the job is comparing magnitudes across a dozen categories,
+ * which people read accurately from a shared baseline and badly from angles.
+ * One hue rather than a colour per category — the emoji already carries
+ * identity, and a 12-colour categorical palette cannot stay distinguishable.
+ * Bars are scaled against the largest category so differences stay visible.
+ */
+function renderCatChart(txns, total) {
+  const chart = $('#catChart');
+  const cap = $('#catCaption');
+
+  const byCat = new Map();
+  for (const t of txns) byCat.set(t.cat, (byCat.get(t.cat) || 0) + t.amt);
+  const cats = [...byCat.entries()].sort((x, y) => y[1] - x[1]);
+
+  if (!cats.length) {
+    chart.innerHTML = '<div class="empty">Nothing logged yet</div>';
+    cap.textContent = '';
+    return;
+  }
+
+  const max = cats[0][1];
+  chart.innerHTML = cats.map(([k, v]) => {
+    const c = CAT[k] || CAT.misc;
+    const pct = total ? (v / total) * 100 : 0;
+    // divs rather than spans inside a button: block layout by default, so the
+    // bars do not depend on a display override landing
+    return `<div class="chart-row" role="button" tabindex="0" data-cat="${k}"
+              aria-label="${escapeHtml(c.n)}, ${money(v)}, ${pct.toFixed(0)}% of the month">
+      <div class="chart-emoji">${c.e}</div>
+      <div class="chart-mid">
+        <div class="chart-label">
+          <span class="chart-name">${escapeHtml(c.n)}</span>
+          <span class="chart-pct">${pct < 1 ? '<1' : Math.round(pct)}%</span>
+        </div>
+        <div class="chart-track"><div class="chart-bar" style="width:${Math.max(2, (v / max) * 100)}%"></div></div>
+      </div>
+      <div class="chart-val">${money(v)}</div>
+    </div>`;
+  }).join('');
+
+  const top = CAT[cats[0][0]] || CAT.misc;
+  const share = total ? Math.round((cats[0][1] / total) * 100) : 0;
+  cap.textContent = `${cats.length} categories · ${top.n.toLowerCase()} is the biggest at ${share}%. Tap one to see what's in it.`;
 }
 
 function renderBills() {
@@ -798,9 +834,9 @@ function renderDueCard() {
   card.classList.remove('hidden');
   $('#dueList').innerHTML = rows.map(({ b, st }) => `
     <div class="due-row">
-      <span style="min-width:0">
+      <span>
         <span class="due-name">${escapeHtml(b.name)}</span>
-        <span class="due-meta"> · ${dueLabel(st)}</span>
+        <span class="due-meta">${dueLabel(st)}</span>
       </span>
       <button class="due-pay" data-pay="${b.id}">${money(b.amt)} · Pay</button>
     </div>`).join('');
@@ -1528,6 +1564,17 @@ function wireEvents() {
   $('#monthPrev').addEventListener('click', () => { S.month = shiftMonth(S.month, -1); renderHome(); });
   $('#monthNext').addEventListener('click', () => { S.month = shiftMonth(S.month, 1); renderHome(); });
   $('#syncPill').addEventListener('click', () => sync({ quiet: false }));
+
+  // tapping a bar filters History to that category
+  $('#catChart').addEventListener('click', e => {
+    const b = e.target.closest('[data-cat]');
+    if (!b) return;
+    const c = CAT[b.dataset.cat] || CAT.misc;
+    S.histQuery = c.n;
+    $('#histSearch').value = c.n;
+    go('hist');
+    haptic();
+  });
 
   // add view
   $('#addPad').addEventListener('click', e => {

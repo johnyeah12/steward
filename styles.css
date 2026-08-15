@@ -227,6 +227,48 @@ button { background: none; border: 0; cursor: pointer; }
 .settle-big { font-size: 24px; font-weight: 700; letter-spacing: -.5px; display: block; margin-top: 4px; }
 .settle-even { color: var(--green); font-weight: 600; }
 
+/* ─────────── Category chart ─────────── */
+/* Magnitude comparison across categories → ranked bars, one hue.
+   The dark step is chosen against the dark surface, not flipped from light. */
+:root { --chart: #6b4ee6; --chart-track: rgba(107,78,230,.13); }
+@media (prefers-color-scheme: dark) {
+  :root { --chart: #8f74f0; --chart-track: rgba(143,116,240,.20); }
+}
+
+.chart { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.chart-row {
+  display: grid; grid-template-columns: 22px 1fr auto;
+  gap: 10px; align-items: center;
+  width: 100%; text-align: left;
+  padding: 5px 0; border: 0; background: none;
+  border-radius: 8px;
+  transition: background .12s;
+}
+.chart-row:active { background: var(--chart-track); }
+.chart-emoji { font-size: 16px; text-align: center; }
+.chart-mid { min-width: 0; display: block; }
+.chart-label {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 13.5px; margin-bottom: 4px;
+}
+.chart-name { color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chart-pct { color: var(--txt-2); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.chart-track {
+  display: block; height: 10px; border-radius: 5px;
+  background: var(--chart-track); overflow: hidden;
+}
+.chart-bar {
+  display: block; height: 100%; min-width: 3px;
+  background: var(--chart);
+  border-radius: 0 4px 4px 0;          /* rounded data-end, square at baseline */
+  transition: width .5s cubic-bezier(.4,0,.2,1);
+}
+.chart-val {
+  font-size: 13.5px; font-weight: 600; color: var(--txt);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.chart-cap { font-size: 12.5px; color: var(--txt-3); margin: 12px 0 0; line-height: 1.45; }
+
 .cats { display: flex; flex-direction: column; gap: 13px; }
 .cat-row { display: grid; grid-template-columns: 26px 1fr auto; gap: 11px; align-items: center; }
 .cat-emoji { font-size: 19px; text-align: center; }
@@ -311,7 +353,8 @@ button { background: none; border: 0; cursor: pointer; }
 }
 .due-row:last-child { border-bottom: 0; }
 .due-row:first-child { padding-top: 0; }
-.due-name { font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.due-row > span:first-child { min-width: 0; }
+.due-name { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .due-meta { font-size: 13px; color: var(--txt-2); }
 .due-pay {
   font-size: 13px; font-weight: 600; color: var(--tint);
