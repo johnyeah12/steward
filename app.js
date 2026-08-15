@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════
-   OurMoney — a private, two-person expense tracker.
+   Steward — a private, two-person expense tracker.
 
    Data model is an append-only event log. Every device appends
    immutable, uniquely-IDed events; syncing is a set union, so two
@@ -36,7 +36,7 @@ const LEDGER_PATH = 'ledger.json';
 const GH_API = 'https://api.github.com';
 const SYNC_EVERY_MS = 60_000;
 
-const K = { vault: 'om.vault', cfg: 'om.cfg', log: 'om.log', dev: 'om.dev', synced: 'om.synced' };
+const K = { vault: 'st.vault', cfg: 'st.cfg', log: 'st.log', dev: 'st.dev', synced: 'st.synced' };
 
 /* ───────────────────────── Tiny helpers ───────────────────────── */
 
@@ -63,6 +63,49 @@ const bufToB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
 const b64ToBuf = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 
 function haptic() { if (navigator.vibrate) navigator.vibrate(8); }
+
+const blobToB64 = blob => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res(String(r.result).split(',')[1]);
+  r.onerror = () => rej(r.error);
+  r.readAsDataURL(blob);
+});
+
+/* ── receipt photos live in IndexedDB, not localStorage —
+      they're blobs, and they must survive being offline. ── */
+const IDB = (() => {
+  const NAME = 'steward', STORE = 'receipts';
+  let dbp = null;
+
+  function db() {
+    if (!dbp) dbp = new Promise((res, rej) => {
+      const r = indexedDB.open(NAME, 1);
+      r.onupgradeneeded = () => {
+        if (!r.result.objectStoreNames.contains(STORE)) r.result.createObjectStore(STORE);
+      };
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    return dbp;
+  }
+
+  const tx = async (mode, fn) => {
+    const d = await db();
+    return new Promise((res, rej) => {
+      const t = d.transaction(STORE, mode);
+      const req = fn(t.objectStore(STORE));
+      t.oncomplete = () => res(req ? req.result : undefined);
+      t.onerror = () => rej(t.error);
+    });
+  };
+
+  return {
+    put:  (k, v) => tx('readwrite', s => s.put(v, k)),
+    get:  k      => tx('readonly',  s => s.get(k)),
+    del:  k      => tx('readwrite', s => s.delete(k)),
+    keys: ()     => tx('readonly',  s => s.getAllKeys()),
+  };
+})();
 
 let toastTimer;
 function toast(msg) {
@@ -164,6 +207,7 @@ function appendEvent(ev) {
 function reduceLog() {
   const evs = [...S.log.events].sort((x, y) => (x.t - y.t) || (x.i < y.i ? -1 : 1));
   const map = new Map();
+  const bmap = new Map();
   let settledAt = 0;
 
   for (const e of evs) {
@@ -171,9 +215,154 @@ function reduceLog() {
     else if (e.k === 'edit') { const cur = map.get(e.x); if (cur) map.set(e.x, { ...cur, ...e.p }); }
     else if (e.k === 'del')  map.delete(e.x);
     else if (e.k === 'settle') settledAt = e.t;
+    else if (e.k === 'badd')  bmap.set(e.x.id, { ...e.x });
+    else if (e.k === 'bedit') { const cur = bmap.get(e.x); if (cur) bmap.set(e.x, { ...cur, ...e.p }); }
+    else if (e.k === 'bdel')  bmap.delete(e.x);
   }
   const txns = [...map.values()].sort((x, y) => (y.date < x.date ? -1 : y.date > x.date ? 1 : y._born - x._born));
-  return { txns, settledAt };
+  const bills = [...bmap.values()].sort((x, y) => x.day - y.day || (x.name > y.name ? 1 : -1));
+  return { txns, bills, settledAt };
+}
+
+/* ───────────────────────── Bills ───────────────────────── */
+
+const daysInMonth = mk => { const [y, m] = mk.split('-').map(Number); return new Date(y, m, 0).getDate(); };
+const billDueISO = (bill, mk) => `${mk}-${String(Math.min(bill.day, daysInMonth(mk))).padStart(2, '0')}`;
+const daysBetween = (from, to) =>
+  Math.round((Date.parse(to + 'T00:00:00') - Date.parse(from + 'T00:00:00')) / 864e5);
+
+/** Where a bill stands for a given month: paid, late, due soon, or still ahead. */
+function billStatus(bill, txns, mk, today = todayISO(), lead = leadDays()) {
+  const due = billDueISO(bill, mk);
+  const paid = txns.find(t => t.bill === bill.id && monthKey(t.date) === mk);
+  if (paid) return { state: 'paid', due, txn: paid };
+  const days = daysBetween(today, due);
+  if (days < 0)     return { state: 'late', due, days };
+  if (days <= lead) return { state: 'soon', due, days };
+  return { state: 'idle', due, days };
+}
+
+/** Shared settings ride in the event log so both phones — and the reminder
+    job — agree on them. Local cfg is only a fallback. */
+function sharedSettings() {
+  let out = {};
+  for (const e of [...S.log.events].sort((x, y) => x.t - y.t)) {
+    if (e.k === 'cfg') out = { ...out, ...e.p };
+  }
+  return out;
+}
+
+const leadDays = () => Number(sharedSettings().lead || (S.cfg && S.cfg.lead)) || 3;
+
+function dueLabel(st) {
+  if (st.state === 'paid') return 'Paid';
+  if (st.days === 0)  return 'Due today';
+  if (st.days === 1)  return 'Due tomorrow';
+  if (st.days === -1) return '1 day late';
+  if (st.days < 0)    return `${-st.days} days late`;
+  return `Due in ${st.days} days`;
+}
+
+/* ── pasting a table out of a spreadsheet, Notes, or an email ── */
+
+const HEAD_NAME = /^(name|bill|item|description|desc|payee|what|vendor|merchant)$/i;
+const HEAD_AMT  = /^(amount|amt|cost|price|total|sum|monthly|value|hk\$?|\$|fee)$/i;
+const HEAD_DAY  = /^(due|day|date|due day|due date|dom|when)$/i;
+
+function splitCells(line, delim) {
+  let cells;
+  if (delim === '\t')     cells = line.split('\t');
+  else if (delim === '|') cells = line.replace(/^\||\|$/g, '').split('|');
+  else if (delim === ',') cells = line.split(',');
+  else                    cells = line.split(/\s{2,}/);
+  return cells.map(c => c.trim());
+}
+
+function toAmount(s) {
+  if (!s) return null;
+  const m = String(s).replace(/[^\d.,-]/g, '').replace(/,(?=\d{3}\b)/g, '');
+  const v = parseFloat(m.replace(/,/g, '.'));
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+function toDay(s) {
+  if (!s) return null;
+  const str = String(s).trim();
+  let m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);           // 2026-08-15
+  if (m) return +m[3];
+  m = str.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-]\d{2,4})?$/);     // 15/08
+  if (m) return +m[1];
+  m = str.match(/(\d{1,2})\s*(?:st|nd|rd|th)?/i);                // 15th, "due 15"
+  if (m) { const d = +m[1]; return d >= 1 && d <= 31 ? d : null; }
+  return null;
+}
+
+/**
+ * Parse pasted bill rows. Accepts spreadsheet tabs, CSV, markdown tables,
+ * column-aligned text, or one bill per line. Always returns rows for review —
+ * nothing is imported without the user seeing it first.
+ */
+function parseBillTable(text) {
+  const raw = String(text || '').split(/\r?\n/).map(l => l.trim())
+    .filter(l => l && !/^[|+\s:-]+$/.test(l));          // drop markdown rules
+  if (!raw.length) return [];
+
+  const has = (re) => raw.filter(l => re.test(l)).length / raw.length > 0.5;
+  const delim = has(/\t/) ? '\t' : has(/\|/) ? '|' : has(/,/) ? ',' : has(/\s{2,}/) ? '  ' : null;
+
+  let rows = delim ? raw.map(l => splitCells(l, delim)) : raw.map(l => [l]);
+
+  // header?
+  let idx = { name: 0, amt: 1, day: 2 };
+  const first = rows[0];
+  const looksHeader = first.length > 1 &&
+    first.some(c => HEAD_NAME.test(c) || HEAD_AMT.test(c) || HEAD_DAY.test(c)) &&
+    !first.some(c => toAmount(c) !== null && /^\W*\d/.test(c));
+  if (looksHeader) {
+    first.forEach((c, i) => {
+      if (HEAD_NAME.test(c)) idx.name = i;
+      else if (HEAD_AMT.test(c)) idx.amt = i;
+      else if (HEAD_DAY.test(c)) idx.day = i;
+    });
+    rows = rows.slice(1);
+  }
+
+  return rows.map(cells => {
+    let name = null, amount = null, day = null;
+
+    if (cells.length === 1) {
+      // "Netflix 78 15th"  /  "Netflix $78 due 15"
+      const line = cells[0];
+      const nums = [...line.matchAll(/(?:HK\$|US\$|\$|₱|€|£|¥)?\s*(\d[\d,]*(?:\.\d{1,2})?)\s*(st|nd|rd|th)?/gi)];
+      name = line.slice(0, nums.length ? nums[0].index : line.length)
+                 .replace(/[-–:,]+$/, '').trim() || null;
+      const vals = nums.map(m => ({ v: parseFloat(m[1].replace(/,/g, '')), ord: !!m[2], txt: m[0] }));
+      if (vals.length === 1) amount = vals[0].v;
+      else if (vals.length >= 2) {
+        const ordinal = vals.find(x => x.ord && x.v <= 31);
+        const dayPick = ordinal || vals.slice(1).find(x => Number.isInteger(x.v) && x.v <= 31) || vals[vals.length - 1];
+        const amtPick = vals.find(x => x !== dayPick);
+        day = dayPick ? Math.round(dayPick.v) : null;
+        amount = amtPick ? amtPick.v : null;
+      }
+    } else {
+      name   = (cells[idx.name] || '').replace(/[*_`]/g, '').trim() || null;
+      amount = toAmount(cells[idx.amt]);
+      day    = toDay(cells[idx.day]);
+      // columns not where we guessed — recover by shape
+      if (amount == null) for (const c of cells) { const v = toAmount(c); if (v != null && c !== cells[idx.day]) { amount = v; break; } }
+      if (day == null)    for (let i = cells.length - 1; i > 0; i--) { const d = toDay(cells[i]); if (d != null && toAmount(cells[i]) !== amount) { day = d; break; } }
+      if (!name) name = cells.find(c => /[A-Za-z一-鿿]{2,}/.test(c)) || null;
+    }
+
+    const issues = [];
+    if (!name)            issues.push('no name');
+    if (amount == null)   issues.push('no amount');
+    if (day == null)      issues.push('no due day');
+    else if (day < 1 || day > 31) issues.push('day out of range');
+
+    return { name, amount, day, ok: issues.length === 0, issues };
+  });
 }
 
 /** Net balance in cents. Positive ⇒ person A is owed. */
@@ -229,6 +418,63 @@ async function pushRemote(log, sha) {
   return res;
 }
 
+/* ── receipts: one file per photo, written once and never rewritten,
+      so they never bloat a ledger.json sync ── */
+
+const receiptPath = id => `receipts/${id}.jpg`;
+
+async function uploadReceipt(id, blob) {
+  const res = await gh(`/repos/${S.secret.repo}/contents/${receiptPath(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ message: `receipt ${id}`, content: await blobToB64(blob) }),
+  });
+  return res.ok || res.status === 422;   // 422 ⇒ already up there
+}
+
+/** Push any photos taken while offline. Best-effort: never blocks the ledger. */
+async function flushReceipts() {
+  let keys;
+  try { keys = await IDB.keys(); } catch { return; }
+  for (const id of keys) {
+    let rec;
+    try { rec = await IDB.get(id); } catch { continue; }
+    if (!rec || rec.uploaded || !rec.blob) continue;
+    try {
+      if (await uploadReceipt(id, rec.blob)) await IDB.put(id, { ...rec, uploaded: true });
+    } catch { return; }                 // still offline — try again next sync
+  }
+}
+
+/** Get a receipt for display: local copy first, else pull it down and cache. */
+async function fetchReceipt(id) {
+  try {
+    const local = await IDB.get(id);
+    if (local && local.blob) return local.blob;
+  } catch { /* fall through to network */ }
+  if (!S.secret) return null;
+  const res = await gh(`/repos/${S.secret.repo}/contents/${receiptPath(id)}`);
+  if (!res.ok) return null;
+  const j = await res.json();
+  const bin = atob(String(j.content).replace(/\s/g, ''));
+  const blob = new Blob([Uint8Array.from(bin, c => c.charCodeAt(0))], { type: 'image/jpeg' });
+  try { await IDB.put(id, { blob, uploaded: true }); } catch { /* cache is optional */ }
+  return blob;
+}
+
+async function deleteReceipt(id) {
+  try { await IDB.del(id); } catch { /* nothing local */ }
+  if (!S.secret) return;
+  try {
+    const res = await gh(`/repos/${S.secret.repo}/contents/${receiptPath(id)}`);
+    if (!res.ok) return;
+    const j = await res.json();
+    await gh(`/repos/${S.secret.repo}/contents/${receiptPath(id)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ message: `remove receipt ${id}`, sha: j.sha }),
+    });
+  } catch { /* it'll just linger in the repo */ }
+}
+
 function unionLogs(a, b) {
   const seen = new Map();
   for (const e of [...a.events, ...b.events]) if (e && e.i && !seen.has(e.i)) seen.set(e.i, e);
@@ -261,6 +507,7 @@ async function sync({ quiet = true } = {}) {
       if (res.status === 409 || res.status === 422) continue;   // someone else wrote first — re-merge
       throw new Error(`push ${res.status}`);
     }
+    await flushReceipts();
     paintSync('ok', 'Synced');
     render();
   } catch (err) {
@@ -289,6 +536,8 @@ function paintSyncInfo() {
 function render() {
   if (!S.cfg) return;
   renderHome();
+  renderDueCard();
+  renderBills();
   renderHistory();
   renderSettings();
 }
@@ -395,12 +644,95 @@ function renderHistory() {
           <span class="hist-emoji">${(CAT[t.cat] || CAT.misc).e}</span>
           <span class="hist-mid">
             <span class="hist-note">${escapeHtml(t.note || (CAT[t.cat] || CAT.misc).n)}</span>
-            <span class="hist-meta">${nameOf(t.payer)} paid · ${t.split === 'both' ? 'shared' : nameOf(t.split) + ' only'}</span>
+            <span class="hist-meta">${t.rcpt ? '🧾 ' : ''}${nameOf(t.payer)} paid · ${t.split === 'both' ? 'shared' : nameOf(t.split) + ' only'}</span>
           </span>
           <span class="hist-amt">${money(t.amt)}</span>
         </button>`).join('')}</div>
     </div>`;
   }).join('');
+}
+
+function renderBills() {
+  const { txns, bills } = reduceLog();
+  const mk = S.month;
+
+  const total = bills.reduce((s, b) => s + b.amt, 0);
+  $('#billTotal').textContent = bills.length ? money(total) : '—';
+
+  const states = bills.map(b => billStatus(b, txns, mk));
+  const unpaidCount = states.filter(s => s.state !== 'paid').length;
+  $('#billUnpaid').textContent = bills.length
+    ? (unpaidCount ? `${unpaidCount} still to pay in ${monthName(mk)}` : `All paid for ${monthName(mk)} 🎉`)
+    : '';
+  $('#billUnpaid').className = 'hero-delta' + (bills.length && !unpaidCount ? ' down' : '');
+
+  if (!bills.length) {
+    $('#billList').innerHTML = `<div class="empty">No bills yet.\nTap ＋ to add one, or Paste to bring in a whole list.</div>`;
+    return;
+  }
+
+  const PILL = { paid: 'pill-paid', soon: 'pill-soon', late: 'pill-late', idle: 'pill-idle' };
+  $('#billList').innerHTML = `
+    <div class="bill-group">
+      <div class="bill-group-hd">${escapeHtml(monthName(mk))}</div>
+      <div class="bill-items">
+        ${bills.map((b, i) => {
+          const st = states[i];
+          return `<button class="bill-row" data-bill="${b.id}">
+            <span>
+              <span class="bill-name">${escapeHtml(b.name)}</span>
+              <span class="bill-when">${(CAT[b.cat] || CAT.misc).e} Due the ${ordinal(b.day)}</span>
+            </span>
+            <span class="bill-right">
+              <span class="bill-amt">${money(b.amt)}</span>
+              <span class="pill ${PILL[st.state]}">${dueLabel(st)}</span>
+            </span>
+          </button>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+const ordinal = n => n + (['th','st','nd','rd'][(n % 100 - 20) % 10] || ['th','st','nd','rd'][n % 100] || 'th');
+
+function renderDueCard() {
+  const { txns, bills } = reduceLog();
+  const mk = monthKey(todayISO());
+  const rows = bills
+    .map(b => ({ b, st: billStatus(b, txns, mk) }))
+    .filter(x => x.st.state === 'soon' || x.st.state === 'late')
+    .sort((x, y) => x.st.days - y.st.days);
+
+  const card = $('#dueCard');
+  if (!rows.length) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  $('#dueList').innerHTML = rows.map(({ b, st }) => `
+    <div class="due-row">
+      <span style="min-width:0">
+        <span class="due-name">${escapeHtml(b.name)}</span>
+        <span class="due-meta"> · ${dueLabel(st)}</span>
+      </span>
+      <button class="due-pay" data-pay="${b.id}">${money(b.amt)} · Pay</button>
+    </div>`).join('');
+}
+
+function markBillPaid(billId) {
+  const { bills } = reduceLog();
+  const b = bills.find(x => x.id === billId);
+  if (!b) return;
+  const mk = monthKey(todayISO());
+  // dated to the due day so it always lands in the month it belongs to
+  appendEvent({
+    k: 'add',
+    x: {
+      id: uid(), amt: b.amt, cat: b.cat, note: b.name,
+      date: billDueISO(b, mk), payer: b.payer, split: b.split, bill: b.id,
+    },
+  });
+  haptic();
+  toast(`${b.name} marked paid`);
+  render();
+  sync();
 }
 
 function escapeHtml(s) {
@@ -414,13 +746,22 @@ function renderSettings() {
   $('#setMe').value = S.cfg.me;
   $('#setBudget').value = S.cfg.budget || '';
   $('#setBudgetCur').textContent = `Amount (${S.cfg.cur})`;
+  $('#setLead').value = String(leadDays());
+  const n = reduceLog().bills.length;
+  $('#setLeadNote').textContent = n
+    ? `${n} bill${n === 1 ? '' : 's'} being watched. Both of you get the reminder.`
+    : 'No bills yet — add some on the Bills tab.';
   paintSyncInfo();
 }
 
 /* ───────────────────────── Add-expense view ───────────────────────── */
 
 function newDraft() {
-  S.draft = { raw: '0', cat: 'food', note: '', date: todayISO(), payer: iAm(), split: 'both' };
+  if (S.draft && S.draft.thumbUrl) URL.revokeObjectURL(S.draft.thumbUrl);
+  S.draft = {
+    raw: '0', cat: 'food', note: '', date: todayISO(), payer: iAm(), split: 'both',
+    photo: null, thumbUrl: null, scan: null,
+  };
 }
 
 function paintAdd() {
@@ -440,6 +781,91 @@ function paintAdd() {
   const split = $('#addSplit').children;
   split[1].textContent = `${S.cfg.nameA} only`; split[2].textContent = `${S.cfg.nameB} only`;
   [...split].forEach(b => b.classList.toggle('on', b.dataset.v === d.split));
+
+  paintScanResult();
+}
+
+/* ── the read-back panel: OCR never silently sets an amount ── */
+function paintScanResult() {
+  const d = S.draft;
+  const box = $('#scanResult');
+  if (!d.photo) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+
+  const s = d.scan || {};
+  const shopName = s.merchant && s.merchant.length > 22 ? s.merchant.slice(0, 21) + '…' : s.merchant;
+  let head, sub, cls = '';
+  if (!s.amountFound) {
+    head = 'Receipt attached';
+    sub = "Couldn't make out a total — type the amount in yourself.";
+    cls = 'bad';
+  } else if (s.confidence === 'high') {
+    head = shopName ? `Read from ${escapeHtml(shopName)}` : 'Read from receipt';
+    sub = 'Looks clear. Worth a glance anyway.';
+  } else {
+    head = shopName ? `Read from ${escapeHtml(shopName)}` : 'Read from receipt';
+    sub = 'Not fully sure of this one — please check the amount.';
+    cls = 'warn';
+  }
+
+  box.className = 'scan-card-result';
+  box.innerHTML = `
+    <img class="scan-thumb" src="${d.thumbUrl}" alt="Receipt">
+    <div class="scan-body">
+      <div class="scan-head">${head}</div>
+      <div class="scan-sub ${cls}">${sub}</div>
+      <button class="scan-drop" id="scanDrop">Remove photo</button>
+    </div>`;
+  $('#scanDrop').onclick = () => {
+    if (d.thumbUrl) URL.revokeObjectURL(d.thumbUrl);
+    d.photo = null; d.thumbUrl = null; d.scan = null;
+    paintScanResult();
+  };
+}
+
+/* ── scanning ── */
+
+let scanAborted = false;
+
+function showScan(msg, pct) {
+  $('#scanOverlay').classList.remove('hidden');
+  $('#scanMsg').textContent = msg;
+  $('#scanBar').style.width = Math.round(pct * 100) + '%';
+}
+const hideScan = () => $('#scanOverlay').classList.add('hidden');
+
+async function onScanFile(file) {
+  if (!file) return;
+  if (!/^image\//.test(file.type)) { toast('That file is not an image'); return; }
+
+  scanAborted = false;
+  showScan('Preparing the reader…', 0.04);
+  try {
+    const r = await OCR.read(file, todayISO(), (msg, p) => { if (!scanAborted) showScan(msg, p); });
+    if (scanAborted) return;
+
+    const d = S.draft;
+    if (d.thumbUrl) URL.revokeObjectURL(d.thumbUrl);
+    d.photo = r.thumb;
+    d.thumbUrl = URL.createObjectURL(r.thumb);
+    d.scan = { confidence: r.confidence, merchant: r.merchant, amountFound: r.amount != null };
+
+    if (r.amount != null) {
+      d.raw = ZERO_DP.has(S.cfg.cur) ? String(Math.round(r.amount))
+            : (Number.isInteger(r.amount) ? String(r.amount) : r.amount.toFixed(2));
+    }
+    if (r.merchant && !d.note) d.note = r.merchant;
+    if (r.category) d.cat = r.category;
+    if (r.date) d.date = r.date;
+
+    paintAdd();
+    haptic();
+    toast(r.amount != null ? `Read ${money(Math.round(r.amount * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)))}` : 'Receipt attached');
+  } catch (e) {
+    if (!scanAborted) toast(e.message || 'Could not read that receipt');
+  } finally {
+    hideScan();
+    $('#scanInput').value = '';   // let the same file be picked again
+  }
 }
 
 function pressAmount(k) {
@@ -461,14 +887,19 @@ function saveDraft() {
   const val = parseFloat(d.raw);
   if (!val || val <= 0) { toast('Enter an amount first'); return; }
 
+  const id = uid();
   appendEvent({
     k: 'add',
     x: {
-      id: uid(),
+      id,
       amt: Math.round(val * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)),
       cat: d.cat, note: d.note.trim(), date: d.date, payer: d.payer, split: d.split,
+      ...(d.photo ? { rcpt: 1 } : {}),
     },
   });
+
+  // Store the photo locally right away; sync uploads it when there's a connection.
+  if (d.photo) IDB.put(id, { blob: d.photo, uploaded: false }).catch(() => toast('Could not save the photo on this phone'));
 
   haptic();
   toast(`${money(Math.round(val * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)))} logged`);
@@ -490,6 +921,7 @@ function openSheet(id) {
   $('#sheetBody').innerHTML = `
     <h3 class="sheet-title">Edit expense</h3>
     <p class="sheet-sub">${dayName(t.date)}</p>
+    ${t.rcpt ? '<div id="edReceipt"></div>' : ''}
     <div class="card">
       <label class="field"><span>Amount</span><input id="edAmt" type="number" inputmode="decimal" step="any" value="${(ZERO_DP.has(S.cfg.cur) ? t.amt : t.amt / 100).toFixed(dp)}"></label>
       <label class="field"><span>Note</span><input id="edNote" type="text" value="${escapeHtml(t.note || '')}" placeholder="Optional"></label>
@@ -510,9 +942,21 @@ function openSheet(id) {
 
   $('#sheet').classList.remove('hidden');
 
+  if (t.rcpt) {
+    const slot = $('#edReceipt');
+    slot.innerHTML = '<p class="card-note">Loading receipt…</p>';
+    fetchReceipt(id).then(blob => {
+      if (!blob) { slot.innerHTML = '<p class="card-note">Receipt not downloaded yet — sync and reopen.</p>'; return; }
+      const url = URL.createObjectURL(blob);
+      slot.innerHTML = `<img class="receipt-view" src="${url}" alt="Receipt">`;
+      slot.querySelector('img').onload = () => URL.revokeObjectURL(url);
+    }).catch(() => { slot.innerHTML = '<p class="card-note">Could not load the receipt.</p>'; });
+  }
+
   $('#edClose').onclick = closeSheet;
   $('#edDel').onclick = () => {
     appendEvent({ k: 'del', x: id });
+    if (t.rcpt) deleteReceipt(id);
     closeSheet(); toast('Deleted'); render(); sync();
   };
   $('#edSave').onclick = () => {
@@ -534,6 +978,133 @@ function openSheet(id) {
 }
 const closeSheet = () => $('#sheet').classList.add('hidden');
 
+/* ── bill editor ── */
+
+function openBillSheet(billId) {
+  const { txns, bills } = reduceLog();
+  const b = billId ? bills.find(x => x.id === billId) : null;
+  const dp = ZERO_DP.has(S.cfg.cur) ? 0 : 2;
+  const st = b ? billStatus(b, txns, S.month) : null;
+
+  $('#sheetBody').innerHTML = `
+    <h3 class="sheet-title">${b ? 'Edit bill' : 'New monthly bill'}</h3>
+    <p class="sheet-sub">${b ? dueLabel(st) + ' · ' + monthName(S.month) : 'Repeats every month'}</p>
+    <div class="card">
+      <label class="field"><span>Name</span><input id="bName" type="text" value="${b ? escapeHtml(b.name) : ''}" placeholder="e.g. Internet" autocapitalize="words"></label>
+      <label class="field"><span>Amount (${S.cfg.cur})</span><input id="bAmt" type="number" inputmode="decimal" step="any" value="${b ? (ZERO_DP.has(S.cfg.cur) ? b.amt : b.amt / 100).toFixed(dp) : ''}" placeholder="0"></label>
+      <label class="field"><span>Due day</span><input id="bDay" type="number" inputmode="numeric" min="1" max="31" value="${b ? b.day : ''}" placeholder="1–31"></label>
+      <label class="field"><span>Category</span><select id="bCat">${CATS.map(c => `<option value="${c.k}"${b && c.k === b.cat ? ' selected' : (!b && c.k === 'bill' ? ' selected' : '')}>${c.e} ${c.n}</option>`).join('')}</select></label>
+      <label class="field"><span>Paid by</span><select id="bPayer">
+        <option value="a"${b && b.payer === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)}</option>
+        <option value="b"${b && b.payer === 'b' ? ' selected' : ''}>${escapeHtml(S.cfg.nameB)}</option></select></label>
+      <label class="field"><span>Split</span><select id="bSplit">
+        <option value="both"${!b || b.split === 'both' ? ' selected' : ''}>Shared 50/50</option>
+        <option value="a"${b && b.split === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)} only</option>
+        <option value="b"${b && b.split === 'b' ? ' selected' : ''}>${escapeHtml(S.cfg.nameB)} only</option></select></label>
+    </div>
+    ${b && st.state !== 'paid' ? '<button id="bPay" class="btn btn-primary">Mark paid for ' + escapeHtml(monthName(S.month)) + '</button><div style="height:10px"></div>' : ''}
+    ${b && st.state === 'paid' ? '<button id="bUnpay" class="btn btn-secondary">Undo this month\'s payment</button><div style="height:10px"></div>' : ''}
+    <button id="bSave" class="btn ${b && st.state !== 'paid' ? 'btn-secondary' : 'btn-primary'}">${b ? 'Save changes' : 'Add bill'}</button>
+    ${b ? '<div style="height:10px"></div><button id="bDel" class="btn btn-danger">Delete bill</button>' : ''}
+    <div style="height:10px"></div>
+    <button id="bClose" class="btn btn-secondary">Cancel</button>`;
+
+  $('#sheet').classList.remove('hidden');
+  $('#bClose').onclick = closeSheet;
+
+  $('#bSave').onclick = () => {
+    const name = $('#bName').value.trim();
+    const amt = parseFloat($('#bAmt').value);
+    const day = parseInt($('#bDay').value, 10);
+    if (!name)                       { toast('Give the bill a name'); return; }
+    if (!amt || amt <= 0)            { toast('Enter an amount'); return; }
+    if (!(day >= 1 && day <= 31))    { toast('Due day must be 1–31'); return; }
+
+    const payload = {
+      name, amt: Math.round(amt * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)), day,
+      cat: $('#bCat').value, payer: $('#bPayer').value, split: $('#bSplit').value,
+    };
+    if (b) appendEvent({ k: 'bedit', x: b.id, p: payload });
+    else   appendEvent({ k: 'badd', x: { id: uid(), ...payload } });
+    closeSheet(); toast(b ? 'Bill updated' : 'Bill added'); render(); sync();
+  };
+
+  if ($('#bPay'))   $('#bPay').onclick = () => { closeSheet(); markBillPaid(b.id); };
+  if ($('#bUnpay')) $('#bUnpay').onclick = () => {
+    appendEvent({ k: 'del', x: st.txn.id });
+    closeSheet(); toast('Payment undone'); render(); sync();
+  };
+  if ($('#bDel')) $('#bDel').onclick = () => {
+    if (!confirm(`Delete "${b.name}"? Past payments stay in your history.`)) return;
+    appendEvent({ k: 'bdel', x: b.id });
+    closeSheet(); toast('Bill deleted'); render(); sync();
+  };
+}
+
+/* ── paste a whole table of bills ── */
+
+function openPasteSheet() {
+  $('#sheetBody').innerHTML = `
+    <h3 class="sheet-title">Paste your bills</h3>
+    <p class="sheet-sub">Copy straight out of a spreadsheet, Notes, or an email. Name, amount, and due day — in any common layout.</p>
+    <textarea id="pasteBox" class="paste-area" placeholder="Internet&#9;380&#9;15
+Electricity&#9;520&#9;20
+Netflix&#9;78&#9;3"></textarea>
+    <div style="height:12px"></div>
+    <button id="pasteGo" class="btn btn-primary">Preview</button>
+    <div id="pasteOut"></div>
+    <div style="height:10px"></div>
+    <button id="pasteClose" class="btn btn-secondary">Cancel</button>`;
+
+  $('#sheet').classList.remove('hidden');
+  $('#pasteClose').onclick = closeSheet;
+  setTimeout(() => $('#pasteBox').focus(), 250);
+
+  $('#pasteGo').onclick = () => {
+    const rows = parseBillTable($('#pasteBox').value);
+    const good = rows.filter(r => r.ok);
+    const out = $('#pasteOut');
+
+    if (!rows.length) { out.innerHTML = '<p class="card-note" style="margin-top:14px">Nothing to read yet.</p>'; return; }
+
+    out.innerHTML = `
+      <div style="height:16px"></div>
+      <div class="card">
+        <div class="card-head">${good.length} of ${rows.length} ready</div>
+        <div class="preview-wrap">
+          <table class="preview-table">
+            <thead><tr><th>Name</th><th>Due</th><th>Amount</th></tr></thead>
+            <tbody>${rows.map(r => `
+              <tr class="${r.ok ? '' : 'row-bad'}">
+                <td>${escapeHtml(r.name || '—')}</td>
+                <td>${r.day ? ordinal(r.day) : '—'}</td>
+                <td>${r.ok ? money(Math.round(r.amount * (ZERO_DP.has(S.cfg.cur) ? 1 : 100))) : escapeHtml(r.issues.join(', '))}</td>
+              </tr>`).join('')}</tbody>
+          </table>
+        </div>
+      </div>
+      ${good.length ? `<button id="pasteImport" class="btn btn-primary">Import ${good.length} bill${good.length === 1 ? '' : 's'}</button>` : ''}
+      ${rows.length > good.length ? '<p class="card-note" style="margin-top:12px">Rows in red are skipped — fix them above and preview again, or add those by hand.</p>' : ''}`;
+
+    if (!good.length) return;
+    $('#pasteImport').onclick = () => {
+      for (const r of good) {
+        appendEvent({
+          k: 'badd',
+          x: {
+            id: uid(), name: r.name,
+            amt: Math.round(r.amount * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)),
+            day: r.day, cat: 'bill', payer: iAm(), split: 'both',
+          },
+        });
+      }
+      closeSheet();
+      toast(`${good.length} bill${good.length === 1 ? '' : 's'} imported`);
+      render(); sync();
+    };
+  };
+}
+
 /* ───────────────────────── Export ───────────────────────── */
 
 async function exportCsv() {
@@ -549,11 +1120,11 @@ async function exportCsv() {
     ].map(esc).join(','));
   }
   const csv  = rows.join('\n');
-  const name = `ourmoney-${todayISO()}.csv`;
+  const name = `steward-${todayISO()}.csv`;
   const file = new File([csv], name, { type: 'text/csv' });
 
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'OurMoney export' }); return; } catch { /* user dismissed */ }
+    try { await navigator.share({ files: [file], title: 'Steward export' }); return; } catch { /* user dismissed */ }
   }
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   const a = Object.assign(document.createElement('a'), { href: url, download: name });
@@ -565,10 +1136,11 @@ async function exportCsv() {
 
 function go(view) {
   S.view = view;
-  for (const v of ['home', 'add', 'hist', 'set']) $('#v-' + v).classList.toggle('hidden', v !== view);
+  for (const v of ['home', 'add', 'bills', 'hist', 'set']) $('#v-' + v).classList.toggle('hidden', v !== view);
   $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
   if (view === 'add') paintAdd();
   if (view === 'hist') renderHistory();
+  if (view === 'bills') renderBills();
 }
 
 /* ───────────────────────── Lock screen ───────────────────────── */
@@ -691,11 +1263,26 @@ function wireEvents() {
   $('#addSave').addEventListener('click', saveDraft);
   $('#addCancel').addEventListener('click', () => { newDraft(); paintAdd(); go('home'); });
 
+  // receipt scanning
+  $('#scanBtn').addEventListener('click', () => $('#scanInput').click());
+  $('#scanInput').addEventListener('change', e => onScanFile(e.target.files && e.target.files[0]));
+  $('#scanCancel').addEventListener('click', () => { scanAborted = true; hideScan(); });
+
   // settle
   $('#settleBtn').addEventListener('click', () => {
     appendEvent({ k: 'settle' });
     toast('Settled up — back to zero');
     render(); sync();
+  });
+
+  // bills
+  $('#billAdd').addEventListener('click', () => openBillSheet(null));
+  $('#billPaste').addEventListener('click', openPasteSheet);
+  $('#billList').addEventListener('click', e => {
+    const b = e.target.closest('[data-bill]'); if (b) openBillSheet(b.dataset.bill);
+  });
+  $('#dueList').addEventListener('click', e => {
+    const b = e.target.closest('[data-pay]'); if (b) markBillPaid(b.dataset.pay);
   });
 
   // history
@@ -712,6 +1299,12 @@ function wireEvents() {
   $('#setNameB').addEventListener('change', e => { S.cfg.nameB = e.target.value.trim() || 'Partner'; saveCfg(); });
   $('#setMe').addEventListener('change', e => { S.cfg.me = e.target.value; saveCfg(); });
   $('#setBudget').addEventListener('change', e => { S.cfg.budget = parseFloat(e.target.value) || 0; saveCfg(); });
+  $('#setLead').addEventListener('change', e => {
+    S.cfg.lead = Number(e.target.value) || 3;
+    lsSet(K.cfg, S.cfg);
+    appendEvent({ k: 'cfg', p: { lead: S.cfg.lead } });   // the reminder job reads this
+    render(); sync();
+  });
   $('#setSyncNow').addEventListener('click', () => sync({ quiet: false }));
   $('#setForget').addEventListener('click', () => {
     if (!confirm('Erase the token and local copy from this phone? Your data stays safe in the repo.')) return;
@@ -779,6 +1372,8 @@ async function finishSetup() {
   };
   lsSet(K.cfg, S.cfg);
   await sealVault(pin, S.secret);
+  // share what the reminder job needs to format its messages
+  appendEvent({ k: 'cfg', p: { cur: S.cfg.cur, lead: 3, nameA, nameB } });
   enterApp();
   toast('All set — add your first expense');
 }

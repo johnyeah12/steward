@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════
-   OurMoney — iOS-native-feeling PWA
+   Steward — iOS-native-feeling PWA
    ══════════════════════════════════════════ */
 
 :root {
@@ -68,8 +68,12 @@ button { background: none; border: 0; cursor: pointer; }
   width: 100%; max-width: 380px;
 }
 .lock-mark { font-size: 52px; line-height: 1; }
-.lock-title { margin: 14px 0 6px; font-size: 28px; font-weight: 700; letter-spacing: -.4px; }
-.lock-msg { margin: 0 0 30px; color: var(--txt-2); font-size: 15px; min-height: 20px; text-align: center; }
+.lock-title { margin: 14px 0 4px; font-size: 28px; font-weight: 700; letter-spacing: -.4px; }
+.lock-verse {
+  margin: 0 0 22px; color: var(--txt-3); font-size: 13.5px;
+  text-align: center; font-style: italic; letter-spacing: .1px;
+}
+.lock-msg { margin: 0 0 26px; color: var(--txt-2); font-size: 15px; min-height: 20px; text-align: center; }
 .lock-msg.err { color: var(--red); }
 
 .pin-dots { display: flex; gap: 20px; margin-bottom: 44px; }
@@ -265,6 +269,119 @@ button { background: none; border: 0; cursor: pointer; }
 }
 .seg button.on { background: var(--bg-elev); color: var(--txt); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
 
+/* ─────────── Bills ─────────── */
+.hero-sm { padding: 10px 0 18px; }
+.hero-amount-sm { font-size: 36px; letter-spacing: -1px; }
+
+.bill-group { margin-bottom: 18px; }
+.bill-group-hd {
+  font-size: 13px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--txt-2); padding: 0 4px 8px;
+}
+.bill-items { background: var(--bg-elev); border-radius: var(--radius); overflow: hidden; }
+.bill-row {
+  display: grid; grid-template-columns: 1fr auto;
+  gap: 12px; align-items: center;
+  padding: 13px 14px; width: 100%; text-align: left;
+  border-bottom: .5px solid var(--sep);
+  transition: background .12s;
+}
+.bill-row:last-child { border-bottom: 0; }
+.bill-row:active { background: var(--tint-soft); }
+.bill-name { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bill-when { display: block; font-size: 13px; color: var(--txt-2); margin-top: 3px; }
+.bill-right { text-align: right; white-space: nowrap; }
+.bill-amt { display: block; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.pill {
+  display: inline-block; margin-top: 4px;
+  font-size: 11px; font-weight: 600; letter-spacing: .2px;
+  padding: 2px 8px; border-radius: 99px;
+}
+.pill-paid { background: rgba(46,184,114,.15); color: var(--green); }
+.pill-soon { background: rgba(232,163,61,.16); color: var(--amber); }
+.pill-late { background: rgba(224,64,63,.15); color: var(--red); }
+.pill-idle { background: var(--tint-soft); color: var(--txt-2); }
+
+.due-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 9px 0; border-bottom: .5px solid var(--sep);
+}
+.due-row:last-child { border-bottom: 0; }
+.due-row:first-child { padding-top: 0; }
+.due-name { font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.due-meta { font-size: 13px; color: var(--txt-2); }
+.due-pay {
+  font-size: 13px; font-weight: 600; color: var(--tint);
+  background: var(--tint-soft); border-radius: 99px; padding: 5px 12px; white-space: nowrap;
+}
+
+.paste-area {
+  width: 100%; min-height: 130px;
+  background: var(--bg-elev); border: 0; border-radius: 12px;
+  padding: 12px; font-size: 14px; outline: none; resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--txt);
+}
+.preview-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.preview-table th {
+  text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--txt-2); padding: 0 8px 7px 0; font-weight: 600;
+}
+.preview-table td { padding: 7px 8px 7px 0; border-top: .5px solid var(--sep); }
+.preview-table td:last-child, .preview-table th:last-child { text-align: right; padding-right: 0; }
+.row-bad td { color: var(--red); }
+.preview-wrap { max-height: 220px; overflow-y: auto; margin-bottom: 4px; }
+
+/* ─────────── Receipt scanning ─────────── */
+.btn-scan {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin-bottom: 16px;
+}
+.scan-ico { font-size: 19px; }
+
+.scan-card-result {
+  display: flex; gap: 13px; align-items: flex-start;
+  background: var(--bg-elev); border-radius: var(--radius);
+  padding: 13px; margin-bottom: 16px;
+}
+.scan-thumb {
+  width: 58px; height: 58px; flex: 0 0 58px;
+  border-radius: 10px; object-fit: cover;
+  background: var(--tint-soft);
+}
+.scan-body { flex: 1; min-width: 0; }
+.scan-head { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
+.scan-sub  { font-size: 13.5px; color: var(--txt-2); line-height: 1.4; }
+.scan-sub.warn { color: var(--amber); }
+.scan-sub.bad  { color: var(--red); }
+.scan-drop { font-size: 14px; color: var(--tint); margin-top: 8px; padding: 2px 0; }
+
+.scan-overlay {
+  position: fixed; inset: 0; z-index: 45;
+  background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 28px;
+  animation: fade .18s ease;
+}
+.scan-card {
+  background: var(--bg-elev); border-radius: 20px;
+  padding: 26px 22px 20px; width: 100%; max-width: 320px; text-align: center;
+}
+.scan-spinner {
+  width: 32px; height: 32px; margin: 0 auto 16px;
+  border: 3px solid var(--tint-soft); border-top-color: var(--tint);
+  border-radius: 50%; animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg) } }
+.scan-msg { font-size: 16px; font-weight: 500; margin-bottom: 14px; }
+.scan-hint { font-size: 12.5px; color: var(--txt-3); margin: 12px 0 16px; line-height: 1.45; }
+
+.receipt-view {
+  width: 100%; border-radius: 12px; display: block;
+  margin-bottom: 14px; background: var(--tint-soft);
+}
+
 /* ─────────── History ─────────── */
 .hist-day { margin-bottom: 20px; }
 .hist-day-hd {
@@ -303,12 +420,13 @@ button { background: none; border: 0; cursor: pointer; }
   z-index: 5;
 }
 .tabs button {
-  flex: 1; padding: 7px 0 6px;
+  flex: 1; padding: 7px 0 6px; min-width: 0;
   display: flex; flex-direction: column; align-items: center; gap: 2px;
-  font-size: 10.5px; color: var(--txt-3);
+  font-size: 10px; color: var(--txt-3);
   transition: color .12s;
 }
-.tabs button .ti { font-size: 22px; line-height: 1.1; }
+.tabs button .ti { font-size: 20px; line-height: 1.15; }
+.tabs button.on .ti { filter: none; }
 .tabs button.on { color: var(--tint); }
 .tab-add .ti { font-weight: 600; }
 

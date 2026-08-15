@@ -1,0 +1,37 @@
+name: Bill reminders
+
+# Runs on GitHub's machines, so reminders arrive whether or not the phones
+# or the Mac are awake. Adjust the hour to taste — cron here is UTC.
+on:
+  schedule:
+    - cron: '0 1 * * *'        # 01:00 UTC = 09:00 Hong Kong
+  workflow_dispatch:            # lets you trigger a test run by hand
+
+permissions:
+  contents: read
+  issues: write                 # needed only for the fallback "open an issue" channel
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check for bills due
+        env:
+          TIMEZONE:          Asia/Hong_Kong
+          TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
+          SMTP_HOST:         ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:         ${{ secrets.SMTP_PORT }}
+          SMTP_USER:         ${{ secrets.SMTP_USER }}
+          SMTP_PASS:         ${{ secrets.SMTP_PASS }}
+          MAIL_TO:           ${{ secrets.MAIL_TO }}
+          MAIL_FROM:         ${{ secrets.MAIL_FROM }}
+          USE_ISSUE:         ${{ vars.USE_ISSUE || '1' }}
+          GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+        run: python .github/scripts/remind.py

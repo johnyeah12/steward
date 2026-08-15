@@ -1,17 +1,21 @@
-/* OurMoney service worker — caches the app shell so the app opens
+/* Steward service worker — caches the app shell so the app opens
    instantly and works with no signal. Data never passes through here:
    GitHub API calls are left entirely alone. */
 
-const VERSION = 'ourmoney-v1';
+const VERSION = 'steward-v2';
 const SHELL = [
   './',
   './index.html',
   './app.js',
+  './ocr.js',
   './styles.css',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
+// vendor/* (the ~6MB Tesseract reader) is deliberately NOT precached — it is
+// fetched on the first scan and then cached by the runtime handler below,
+// so a fresh install stays small and fast.
 
 self.addEventListener('install', e => {
   e.waitUntil(

@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<title>OurMoney</title>
+<title>Steward</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2f2f7">
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="OurMoney">
+<meta name="apple-mobile-web-app-title" content="Steward">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -18,8 +18,9 @@
 <!-- ══════════ LOCK SCREEN ══════════ -->
 <section id="lock" class="fullscreen">
   <div class="lock-inner">
-    <div class="lock-mark">💜</div>
-    <h1 class="lock-title">OurMoney</h1>
+    <div class="lock-mark">🌾</div>
+    <h1 class="lock-title">Steward</h1>
+    <p class="lock-verse">Stewarding together what we've been given</p>
     <p id="lockMsg" class="lock-msg">Enter your passcode</p>
     <div id="pinDots" class="pin-dots">
       <i></i><i></i><i></i><i></i><i></i><i></i>
@@ -36,7 +37,7 @@
 <!-- ══════════ SETUP / ONBOARDING ══════════ -->
 <section id="setup" class="fullscreen hidden">
   <div class="setup-scroll">
-    <h1 class="setup-title">Set up OurMoney</h1>
+    <h1 class="setup-title">Set up Steward</h1>
     <p class="setup-sub">One-time. Do this on both phones with the same details.</p>
 
     <div class="card">
@@ -63,7 +64,7 @@
     <div class="card">
       <div class="card-head">Private sync</div>
       <p class="card-note">Your data lives in a private GitHub repo that only you two can read. Paste a fine-grained token with <b>Contents: Read and write</b> on that one repo.</p>
-      <label class="field"><span>Data repo</span><input id="suRepo" type="text" placeholder="owner/ourmoney-data" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+      <label class="field"><span>Data repo</span><input id="suRepo" type="text" placeholder="owner/steward-data" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
       <label class="field"><span>Access token</span><input id="suToken" type="password" placeholder="github_pat_..." autocapitalize="off" autocorrect="off" spellcheck="false"></label>
       <button id="suTest" class="btn btn-secondary">Test connection</button>
       <p id="suTestMsg" class="test-msg"></p>
@@ -110,6 +111,11 @@
         <div class="bar"><div id="budgetFill" class="bar-fill"></div></div>
       </div>
 
+      <div id="dueCard" class="card hidden">
+        <div class="card-head">Bills due</div>
+        <div id="dueList"></div>
+      </div>
+
       <div class="card">
         <div class="card-head">Settle up</div>
         <div id="settleBody" class="settle-body"></div>
@@ -145,6 +151,12 @@
         <div id="addAmount" class="amount">0</div>
         <div id="addCur" class="amount-cur">HKD</div>
       </div>
+
+      <button id="scanBtn" class="btn btn-secondary btn-scan">
+        <span class="scan-ico">📷</span> Scan a receipt
+      </button>
+      <input id="scanInput" type="file" accept="image/*" hidden>
+      <div id="scanResult" class="hidden"></div>
 
       <div class="keypad keypad-amt" id="addPad">
         <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
@@ -192,6 +204,26 @@
     </div>
   </section>
 
+  <!-- ─── BILLS ─── -->
+  <section id="v-bills" class="view hidden">
+    <header class="hdr">
+      <div class="hdr-row">
+        <button id="billPaste" class="hdr-btn">Paste</button>
+        <h2 class="hdr-title">Monthly bills</h2>
+        <button id="billAdd" class="hdr-btn hdr-btn-strong">＋</button>
+      </div>
+    </header>
+    <div class="scroll">
+      <div class="hero hero-sm">
+        <div class="hero-label">Committed each month</div>
+        <div id="billTotal" class="hero-amount hero-amount-sm">—</div>
+        <div id="billUnpaid" class="hero-delta"></div>
+      </div>
+      <div id="billList"></div>
+      <div class="pad-bottom"></div>
+    </div>
+  </section>
+
   <!-- ─── SETTINGS ─── -->
   <section id="v-set" class="view hidden">
     <header class="hdr"><div class="hdr-row"><span class="hdr-btn hdr-ghost"></span><h2 class="hdr-title">Settings</h2><span class="hdr-btn hdr-ghost"></span></div></header>
@@ -206,6 +238,20 @@
         <label class="field"><span>Partner</span><input id="setNameB" type="text" autocapitalize="words"></label>
         <label class="field"><span>This phone is</span><select id="setMe"><option value="a"></option><option value="b"></option></select></label>
       </div>
+      <div class="card">
+        <div class="card-head">Bill reminders</div>
+        <p class="card-note">Reminders are sent by a daily job in your data repo, so they arrive even when this phone and the Mac are asleep. Set them up once with <b>./setup-reminders.sh</b>.</p>
+        <label class="field"><span>Warn me</span>
+          <select id="setLead">
+            <option value="1">1 day ahead</option>
+            <option value="3">3 days ahead</option>
+            <option value="5">5 days ahead</option>
+            <option value="7">7 days ahead</option>
+          </select>
+        </label>
+        <p id="setLeadNote" class="card-note" style="margin:12px 0 0"></p>
+      </div>
+
       <div class="card">
         <div class="card-head">Sync</div>
         <div id="setSyncInfo" class="card-note"></div>
@@ -224,12 +270,24 @@
   <nav class="tabs">
     <button data-v="home" class="on"><span class="ti">◎</span><span>Home</span></button>
     <button data-v="add" class="tab-add"><span class="ti">＋</span><span>Add</span></button>
+    <button data-v="bills"><span class="ti">🧾</span><span>Bills</span></button>
     <button data-v="hist"><span class="ti">≡</span><span>History</span></button>
     <button data-v="set"><span class="ti">⚙</span><span>Settings</span></button>
   </nav>
 </main>
 
 <div id="toast" class="toast"></div>
+
+<!-- ─── SCAN PROGRESS ─── -->
+<div id="scanOverlay" class="scan-overlay hidden">
+  <div class="scan-card">
+    <div class="scan-spinner"></div>
+    <div id="scanMsg" class="scan-msg">Reading the receipt…</div>
+    <div class="bar"><div id="scanBar" class="bar-fill"></div></div>
+    <p class="scan-hint">First scan downloads the reader (about 6MB). After that it works offline.</p>
+    <button id="scanCancel" class="btn btn-secondary">Cancel</button>
+  </div>
+</div>
 
 <!-- ─── EDIT SHEET ─── -->
 <div id="sheet" class="sheet-backdrop hidden">
@@ -239,6 +297,7 @@
   </div>
 </div>
 
+<script src="ocr.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

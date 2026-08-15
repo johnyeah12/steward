@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────
-#  OurMoney — one-shot deploy.
+#  Steward — one-shot deploy.
 #
 #  Creates two repos under your account:
 #    <app repo>   private, holds this code, published via GitHub Pages
@@ -10,8 +10,8 @@
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
-APP_REPO="${APP_REPO:-ourmoney}"
-DATA_REPO="${DATA_REPO:-ourmoney-data}"
+APP_REPO="${APP_REPO:-steward}"
+DATA_REPO="${DATA_REPO:-steward-data}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -31,7 +31,7 @@ if gh repo view "$USER/$DATA_REPO" >/dev/null 2>&1; then
   ok "data repo $USER/$DATA_REPO already exists"
 else
   gh repo create "$USER/$DATA_REPO" --private --add-readme \
-    --description "Private ledger for OurMoney. Do not make this public." >/dev/null
+    --description "Private ledger for Steward. Do not make this public." >/dev/null
   ok "created private data repo $USER/$DATA_REPO"
 fi
 
@@ -49,7 +49,7 @@ if gh repo view "$USER/$APP_REPO" >/dev/null 2>&1; then
   ok "app repo $USER/$APP_REPO already exists"
 else
   gh repo create "$USER/$APP_REPO" --private \
-    --description "OurMoney — a private expense tracker for two." >/dev/null
+    --description "Steward — a private expense tracker for two." >/dev/null
   ok "created private app repo $USER/$APP_REPO"
 fi
 
@@ -61,27 +61,44 @@ EOF
 git add -A
 git -c user.email="$USER@users.noreply.github.com" \
     -c user.name="$USER" \
-    commit -qm "Deploy OurMoney" 2>/dev/null || ok "nothing new to commit"
+    commit -qm "Deploy Steward" 2>/dev/null || ok "nothing new to commit"
 git remote remove origin 2>/dev/null || true
 git remote add origin "https://github.com/$USER/$APP_REPO.git"
 git push -qu origin main --force
 ok "pushed app code"
 
 # ── 3. GitHub Pages ──────────────────────────────────────────
+enable_pages() {
+  gh api --method POST "/repos/$USER/$APP_REPO/pages" \
+    -f "source[branch]=main" -f "source[path]=/" >/dev/null 2>&1
+}
+
 if gh api "/repos/$USER/$APP_REPO/pages" >/dev/null 2>&1; then
   ok "Pages already enabled"
-else
-  if gh api --method POST "/repos/$USER/$APP_REPO/pages" \
-       -f "source[branch]=main" -f "source[path]=/" >/dev/null 2>&1; then
-    ok "enabled GitHub Pages"
+elif enable_pages; then
+  ok "enabled GitHub Pages"
+elif [ "${PUBLIC_APP:-0}" = "1" ]; then
+  warn "Private Pages needs GitHub Pro — making the APP repo public as asked."
+  warn "Only app code becomes public. $DATA_REPO stays private."
+  gh repo edit "$USER/$APP_REPO" --visibility public --accept-visibility-change-consequences >/dev/null
+  sleep 2
+  if enable_pages; then
+    ok "app repo is public; Pages enabled"
   else
-    warn "Could not enable Pages automatically."
-    warn "Publishing Pages from a PRIVATE repo needs GitHub Pro or higher."
-    warn "Either upgrade, or make the app repo public (the code holds no data):"
-    warn "    gh repo edit $USER/$APP_REPO --visibility public --accept-visibility-change-consequences"
-    warn "…then re-run this script."
-    exit 1
+    die "Still could not enable Pages. Check github.com/$USER/$APP_REPO/settings/pages"
   fi
+else
+  echo
+  warn "Could not enable Pages: publishing from a PRIVATE repo needs GitHub Pro."
+  echo
+  echo "  Your data repo ($DATA_REPO) is private either way — this is only about"
+  echo "  the app code, which holds no expenses and no token."
+  echo
+  echo "  Free fix — make just the app repo public, then re-run:"
+  echo "      PUBLIC_APP=1 ./deploy.sh"
+  echo
+  echo "  Or upgrade to GitHub Pro and re-run ./deploy.sh unchanged."
+  exit 1
 fi
 
 URL="https://$USER.github.io/$APP_REPO/"
@@ -94,10 +111,13 @@ echo "  Pages takes a minute or two to go live on the very first deploy."
 echo
 bold "Next: create the access token"
 echo "  1. Open  https://github.com/settings/personal-access-tokens/new"
-echo "  2. Name it OurMoney, set an expiry you're happy with"
+echo "  2. Name it Steward, set an expiry you're happy with"
 echo "  3. Repository access → Only select repositories → $DATA_REPO"
 echo "  4. Permissions → Repository permissions → Contents → Read and write"
 echo "  5. Generate, copy the token"
 echo
 echo "  Then open $URL on both phones, Share → Add to Home Screen,"
 echo "  and run through setup with the same repo, token and passcode."
+echo
+bold "Then, for bill reminders"
+echo "  ./setup-reminders.sh"

@@ -1,7 +1,7 @@
 {
-  "name": "OurMoney",
-  "short_name": "OurMoney",
-  "description": "A private expense tracker for two.",
+  "name": "Steward",
+  "short_name": "Steward",
+  "description": "Stewarding together what we've been given.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
