@@ -1205,9 +1205,16 @@ async function onStatementFile(file) {
 
   const found = Statement.extract(rows, { year: new Date().getFullYear() });
   const claimed = new Set();          // one charge per bill per month
+  const occurrence = new Map();       // genuine same-day repeats must survive
   for (const r of found) {
     r.cents = Math.round(r.amount * unit);
-    r.sk = stmtKey(r.date, r.desc, r.cents);
+    // Two identical charges on one day are real (two bike hires, two coffees).
+    // Number them so both import, while re-importing the same statement still
+    // produces the same numbering and so still dedupes.
+    const base = stmtKey(r.date, r.desc, r.cents);
+    const n = (occurrence.get(base) || 0) + 1;
+    occurrence.set(base, n);
+    r.sk = n > 1 ? `${base}#${n}` : base;
     r.dup = seen.has(r.sk);
     r.cat = (typeof OCR !== 'undefined' && OCR.parse) ? (OCR.parse(r.desc, todayISO()).category || 'misc') : 'misc';
     r.use = !r.skip && !r.dup;

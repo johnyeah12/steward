@@ -62,8 +62,14 @@ STAMP="steward-$(date +%Y%m%d%H%M%S)"
 ok "service worker cache stamped $STAMP"
 
 [ -d .git ] || { git init -q; git branch -M main; }
+# Keep statements, ledgers and scratch files out of a repo that may be public.
 cat > .gitignore <<'EOF'
 .DS_Store
+_stmt/
+_check.json
+*.pdf
+test-stmt.*
+eStatement*
 EOF
 git add -A
 git -c user.email="$USER@users.noreply.github.com" \

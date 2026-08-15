@@ -264,9 +264,32 @@ const Statement = (() => {
   const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
 
   /** Things that are not spending: repayments, refunds, interest reversals. */
-  const NOT_SPEND = /\b(payment|paymt|pymt|thank\s*you|autopay|auto\s*pay|direct\s*debit\s*received|refund|reversal|credit\s*balance|rebate|cashback|cash\s*back|adjustment|previous\s*balance|opening\s*balance|closing\s*balance|balance\s*b\/?f|total|subtotal|minimum\s*due|statement)\b/i;
+  /**
+   * Things that are not spending. Deliberately does NOT include a bare
+   * "autopay": on a card statement "SMARTONE AUTOPAY" is a merchant collecting
+   * a bill, i.e. real spending. Only a repayment *of the card* is excluded, and
+   * those are caught by "payment" or by their CR/negative sign anyway.
+   */
+  const NOT_SPEND = /\b(payment|paymt|pymt|thank\s*you|direct\s*debit\s*received|refund|reversal|credit\s*balance|rebate|cashback|cash\s*back|adjustment|previous\s*balance|opening\s*balance|closing\s*balance|balance\s*(?:b\/?f|forward|carried)|total|subtotal|minimum\s*due|min\.?\s*payment|statement\s*balance|credit\s*limit|available\s*credit|points?|pts|reward|mileage|miles\s*earned)\b/i;
 
-  function toISODate(s, fallbackYear) {
+  /** A statement usually declares its own date convention above the table. */
+  function detectDateOrder(rows) {
+    for (const cells of rows) {
+      const line = cells.join(' ');
+      if (!/date/i.test(line)) continue;
+      if (!/(amount|description|詳列|銀碼)/i.test(line)) continue;
+      const m = line.match(/\((MM\s*\/\s*DD|DD\s*\/\s*MM)/i);
+      if (m) return /^MM/i.test(m[1].replace(/\s/g, '')) ? 'mdy' : 'dmy';
+    }
+    return null;
+  }
+
+  /**
+   * `order` is 'mdy' or 'dmy' when the statement declares its own convention —
+   * Standard Chartered prints "Date (MM/DD)" above the table while using
+   * DD/MM/YYYY for the statement date itself, so guessing is not good enough.
+   */
+  function toISODate(s, fallbackYear, order) {
     if (!s) return null;
     const t = String(s).trim();
     let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -276,9 +299,12 @@ const Statement = (() => {
     if (m) {
       let y = m[3] ? +m[3] : fallbackYear;
       if (y < 100) y += 2000;
-      const [a, b] = [+m[1], +m[2]];
-      // day-first unless impossible (HK/UK statements are day-first)
-      const [d, mo] = a > 12 ? [a, b] : (b > 12 ? [b, a] : [a, b]);
+      const a = +m[1], b = +m[2];
+      let d, mo;
+      if (order === 'mdy')      { mo = a; d = b; }
+      else if (order === 'dmy') { d = a; mo = b; }
+      else [d, mo] = a > 12 ? [a, b] : (b > 12 ? [b, a] : [a, b]);   // day-first by default
+      if (mo > 12 && d <= 12) { const t2 = d; d = mo; mo = t2; }      // declared order was impossible
       if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
       return null;
     }
@@ -299,24 +325,50 @@ const Statement = (() => {
     return null;
   }
 
-  /** Returns {value, credit} — credit meaning money coming back to you. */
+  /**
+   * Returns {value, credit} — credit meaning money coming back to you.
+   *
+   * Finds the money *token* rather than stripping non-digits from the cell.
+   * Statements routinely bury the amount next to other digits, e.g.
+   * "Transaction Ref 55439136191688701739987 64.00"; stripping would have
+   * yielded 5.5e+24. Amounts are also printed as "1,482 .42", with a space
+   * before the decimals, so the pattern tolerates internal whitespace.
+   */
+  // Whitespace is tolerated only immediately around the decimal separator.
+  // Allowing it through the integer part let the pattern bridge a reference
+  // number and the amount beside it into one absurd figure.
+  const MONEY_TOKEN = /(?:^|[^\d.,])(\d[\d,]*\s?[.,]\s?\d{2})(?![\d.,])/g;
+
   function toMoney(s) {
     if (s == null) return null;
-    let t = String(s).trim();
-    if (!t || !/\d/.test(t)) return null;
-    if (/^[A-Za-z\s]+$/.test(t)) return null;
+    const raw = String(s).trim();
+    if (!raw || !/\d/.test(raw)) return null;
 
-    let credit = false;
-    if (/\bCR\b/i.test(t)) { credit = true; t = t.replace(/\bCR\b/ig, ''); }
-    if (/\bDR\b/i.test(t)) t = t.replace(/\bDR\b/ig, '');
-    if (/^\(.*\)$/.test(t.trim())) { credit = true; t = t.replace(/[()]/g, ''); }
-    if (/^-/.test(t.trim())) { credit = true; }
-    if (/^\+/.test(t.trim())) { credit = false; }
+    // CR/DR often sit flush against the digits ("3,086 .38CR"), so \b is useless
+    let credit = /\d\s*CR\b|\bCR\s*$/i.test(raw);
+    const bracketed = /\(\s*[\d,]/.test(raw) && /\)/.test(raw);
+    if (bracketed) credit = true;
+    if (/(^|\s)-\s*[\d(]/.test(raw)) credit = true;
 
-    t = t.replace(/[^\d.,-]/g, '');
+    let token = null;
+    MONEY_TOKEN.lastIndex = 0;
+    for (let m; (m = MONEY_TOKEN.exec(raw)); ) token = m[1];   // last one wins
+
+    if (token == null) {
+      // No decimals anywhere. Only accept a cell that is essentially just a
+      // number — and keep it short and unspaced, so a card number like
+      // "5427 1340 0083 5018" or a long reference can never pass as an amount.
+      const bare = raw.replace(/\s*(CR|DR)\s*$/i, '').replace(/[()+]/g, '').trim();
+      if (!/^-?\d[\d,]*$/.test(bare)) return null;
+      if (bare.replace(/\D/g, '').length > 7) return null;
+      token = bare;
+    }
+
+    let t = token.replace(/\s/g, '');
     // 1.234,56 (European) vs 1,234.56
-    if (/,\d{2}$/.test(t) && /\./.test(t)) t = t.replace(/\./g, '').replace(',', '.');
+    if (/,\d{2}$/.test(t)) t = t.replace(/\./g, '').replace(',', '.');
     else t = t.replace(/,/g, '');
+
     const v = Math.abs(parseFloat(t));
     if (!Number.isFinite(v) || v === 0) return null;
     return { value: v, credit };
@@ -329,6 +381,7 @@ const Statement = (() => {
    */
   function extract(rows, opts = {}) {
     const year = opts.year || new Date().getFullYear();
+    const order = opts.order || detectDateOrder(rows);
     const out = [];
 
     for (const cells of rows) {
@@ -339,18 +392,23 @@ const Statement = (() => {
       // date: the first cell that parses as one. Statements often carry both a
       // transaction and a posting date, so consume the whole run of them —
       // otherwise the second date ends up glued to the description.
+      //
+      // A real transaction row never has money before its date. Summary panels
+      // do ("1,482.42 | 300.00 | August 25, 2026 | Pts | 2,389,320"), so a date
+      // appearing after an amount means this is not a transaction.
       let date = null, dateAt = -1;
       for (let i = 0; i < cells.length && i < 4; i++) {
-        const d = toISODate(cells[i], year);
+        if (toMoney(cells[i])) break;
+        const d = toISODate(cells[i], year, order);
         if (d) { date = d; dateAt = i; break; }
       }
       if (dateAt >= 0) {
-        while (dateAt + 1 < cells.length && toISODate(cells[dateAt + 1], year)) dateAt++;
+        while (dateAt + 1 < cells.length && toISODate(cells[dateAt + 1], year, order)) dateAt++;
       }
       // some PDFs put the date inline at the start of one long cell
       if (!date) {
         const m = joined.match(/^(\d{1,2}\s*[-/ ]\s*(?:[A-Za-z]{3}|\d{1,2})(?:\s*[-/ ]\s*\d{2,4})?)/);
-        if (m) { date = toISODate(m[1].trim(), year); }
+        if (m) { date = toISODate(m[1].trim(), year, order); }
       }
       if (!date) continue;
 
@@ -375,8 +433,11 @@ const Statement = (() => {
           .replace(/(-?\(?[\d,]+\.\d{2}\)?\s*(?:CR|DR)?)\s*$/i, '')
           .trim();
       }
-      desc = desc.replace(/\s{2,}/g, ' ').replace(/^[-–—:\s]+|[-–—:\s]+$/g, '');
-      if (desc.length < 2) continue;
+      desc = desc
+        .replace(/transaction\s*ref\.?\s*[:#]?\s*\d+/ig, '')   // SC prints a 23-digit ref inline
+        .replace(/\s{2,}/g, ' ')
+        .replace(/^[-–—:\s]+|[-–—:\s]+$/g, '');
+      if (desc.length < 3) continue;
 
       const skip = amount.credit || NOT_SPEND.test(desc);
       out.push({ date, desc, amount: amount.value, credit: amount.credit, skip });

@@ -1,1 +1,6 @@
 .DS_Store
+_stmt/
+_check.json
+*.pdf
+test-stmt.*
+eStatement*
