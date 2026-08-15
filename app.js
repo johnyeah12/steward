@@ -30,6 +30,15 @@ const CATS = [
 ];
 const CAT = Object.fromEntries(CATS.map(c => [c.k, c]));
 
+/** Built-ins plus any category the two of you have added. */
+function allCats() {
+  return [...CATS, ...(S.customCats || [])];
+}
+/** Never throws on an unknown key — an old ledger may name a deleted category. */
+function catOf(k) {
+  return CAT[k] || (S.customCats || []).find(c => c.k === k) || CAT.misc;
+}
+
 const SYMBOL = { HKD: 'HK$', USD: '$', PHP: '₱', EUR: '€', GBP: '£', SGD: 'S$', JPY: '¥', AUD: 'A$' };
 const ZERO_DP = new Set(['JPY']);
 
@@ -209,13 +218,14 @@ function reduceLog() {
   const evs = [...S.log.events].sort((x, y) => (x.t - y.t) || (x.i < y.i ? -1 : 1));
   const map = new Map();
   const bmap = new Map();
-  let settledAt = 0;
+  const cmap = new Map();
 
   for (const e of evs) {
     if (e.k === 'add')    map.set(e.x.id, { ...e.x, _born: e.t });
     else if (e.k === 'edit') { const cur = map.get(e.x); if (cur) map.set(e.x, { ...cur, ...e.p }); }
     else if (e.k === 'del')  map.delete(e.x);
-    else if (e.k === 'settle') settledAt = e.t;
+    else if (e.k === 'catadd') cmap.set(e.x.k, { ...e.x });
+    else if (e.k === 'catdel') cmap.delete(e.x);
     else if (e.k === 'badd')  bmap.set(e.x.id, { ...e.x });
     else if (e.k === 'bedit') { const cur = bmap.get(e.x); if (cur) bmap.set(e.x, { ...cur, ...e.p }); }
     else if (e.k === 'bdel')  bmap.delete(e.x);
@@ -225,7 +235,8 @@ function reduceLog() {
   // order of the original sheet, which is how its owner reads it.
   const bills = [...bmap.values()].sort((x, y) =>
     (x.seq ?? 1e9) - (y.seq ?? 1e9) || (x.name > y.name ? 1 : -1));
-  return { txns, bills, settledAt };
+  S.customCats = [...cmap.values()];
+  return { txns, bills, cats: S.customCats };
 }
 
 /* ───────────────────────── Bills ───────────────────────── */
@@ -440,18 +451,6 @@ function parseBillRow(cells, idx, group) {
     return { name, amount, day, cc, grp: group || null, ok: issues.length === 0, issues };
 }
 
-/** Net balance in cents. Positive ⇒ person A is owed. */
-function balanceOf(txns, settledAt) {
-  let bal = 0;
-  for (const t of txns) {
-    if (t._born <= settledAt) continue;
-    const paidA  = t.payer === 'a' ? t.amt : 0;
-    const shareA = t.split === 'both' ? t.amt / 2 : (t.split === 'a' ? t.amt : 0);
-    bal += paidA - shareA;
-  }
-  return Math.round(bal);
-}
-
 const inMonth = (txns, mk) => txns.filter(t => monthKey(t.date) === mk);
 
 /* ───────────────────────── GitHub sync ───────────────────────── */
@@ -618,7 +617,7 @@ function render() {
 }
 
 function renderHome() {
-  const { txns, settledAt } = reduceLog();
+  const { txns } = reduceLog();
   const mt = inMonth(txns, S.month);
   const total = mt.reduce((s, t) => s + t.amt, 0);
 
@@ -650,21 +649,6 @@ function renderHome() {
     fill.className = 'bar-fill' + (total > cents ? ' over' : '');
   } else bc.classList.add('hidden');
 
-  // settle up — computed across all time, not just this month
-  const bal = balanceOf(txns, settledAt);
-  const body = $('#settleBody');
-  const btn  = $('#settleBtn');
-  if (Math.abs(bal) < 1) {
-    body.innerHTML = `<span class="settle-even">All square 🎉</span>`;
-    btn.classList.add('hidden');
-  } else {
-    const creditor = bal > 0 ? 'a' : 'b';
-    const debtor   = bal > 0 ? 'b' : 'a';
-    const who = debtor === iAm() ? `You owe ${nameOf(creditor)}` : `${nameOf(debtor)} owes you`;
-    body.innerHTML = `${who}<span class="settle-big">${money(Math.abs(bal))}</span>`;
-    btn.classList.remove('hidden');
-  }
-
   renderCatChart(mt, total);
 
   // who paid
@@ -686,7 +670,7 @@ function renderHistory() {
   const { txns } = reduceLog();
   const q = S.histQuery.trim().toLowerCase();
   const list = q
-    ? txns.filter(t => (t.note || '').toLowerCase().includes(q) || (CAT[t.cat] || CAT.misc).n.toLowerCase().includes(q))
+    ? txns.filter(t => (t.note || '').toLowerCase().includes(q) || catOf(t.cat).n.toLowerCase().includes(q))
     : txns;
 
   if (!list.length) {
@@ -703,10 +687,10 @@ function renderHistory() {
       <div class="hist-day-hd"><span class="hist-day-name">${dayName(date)}</span><span class="hist-day-sum">${money(sum)}</span></div>
       <div class="hist-items">${items.map(t => `
         <button class="hist-item" data-id="${t.id}">
-          <span class="hist-emoji">${(CAT[t.cat] || CAT.misc).e}</span>
+          <span class="hist-emoji">${catOf(t.cat).e}</span>
           <span class="hist-mid">
-            <span class="hist-note">${escapeHtml(t.note || (CAT[t.cat] || CAT.misc).n)}</span>
-            <span class="hist-meta">${t.rcpt ? '🧾 ' : ''}${nameOf(t.payer)} paid · ${t.split === 'both' ? 'shared' : nameOf(t.split) + ' only'}</span>
+            <span class="hist-note">${escapeHtml(t.note || catOf(t.cat).n)}</span>
+            <span class="hist-meta">${t.rcpt ? '🧾 ' : ''}${catOf(t.cat).n} · ${nameOf(t.payer)} paid</span>
           </span>
           <span class="hist-amt">${money(t.amt)}</span>
         </button>`).join('')}</div>
@@ -739,27 +723,48 @@ function renderCatChart(txns, total) {
 
   const max = cats[0][1];
   chart.innerHTML = cats.map(([k, v]) => {
-    const c = CAT[k] || CAT.misc;
+    const c = catOf(k);
     const pct = total ? (v / total) * 100 : 0;
+    const open = S.openCat === k;
     // divs rather than spans inside a button: block layout by default, so the
     // bars do not depend on a display override landing
-    return `<div class="chart-row" role="button" tabindex="0" data-cat="${k}"
-              aria-label="${escapeHtml(c.n)}, ${money(v)}, ${pct.toFixed(0)}% of the month">
-      <div class="chart-emoji">${c.e}</div>
-      <div class="chart-mid">
-        <div class="chart-label">
-          <span class="chart-name">${escapeHtml(c.n)}</span>
-          <span class="chart-pct">${pct < 1 ? '<1' : Math.round(pct)}%</span>
+    return `<div class="chart-item${open ? ' open' : ''}">
+      <div class="chart-row" role="button" tabindex="0" data-cat="${k}" aria-expanded="${open}"
+                aria-label="${escapeHtml(c.n)}, ${money(v)}, ${pct.toFixed(0)}% of the month">
+        <div class="chart-emoji">${c.e}</div>
+        <div class="chart-mid">
+          <div class="chart-label">
+            <span class="chart-name">${escapeHtml(c.n)}</span>
+            <span class="chart-pct">${pct < 1 ? '<1' : Math.round(pct)}%</span>
+          </div>
+          <div class="chart-track"><div class="chart-bar" style="width:${Math.max(2, (v / max) * 100)}%"></div></div>
         </div>
-        <div class="chart-track"><div class="chart-bar" style="width:${Math.max(2, (v / max) * 100)}%"></div></div>
+        <div class="chart-val">${money(v)}</div>
       </div>
-      <div class="chart-val">${money(v)}</div>
+      ${open ? renderCatDetail(k, txns) : ''}
     </div>`;
   }).join('');
 
-  const top = CAT[cats[0][0]] || CAT.misc;
+  const top = catOf(cats[0][0]);
   const share = total ? Math.round((cats[0][1] / total) * 100) : 0;
-  cap.textContent = `${cats.length} categories · ${top.n.toLowerCase()} is the biggest at ${share}%. Tap one to see what's in it.`;
+  cap.textContent = `${cats.length} categories · ${top.n.toLowerCase()} is the biggest at ${share}%. Tap one to open it.`;
+}
+
+/** The transactions behind one bar, biggest first. */
+function renderCatDetail(k, txns) {
+  const rows = txns.filter(t => t.cat === k).sort((a, b) => b.amt - a.amt);
+  if (!rows.length) return '';
+  const isOther = k === 'misc';
+  return `<div class="chart-detail">
+    ${isOther ? `<p class="detail-hint">These couldn't be worked out from the merchant name. Tap any one to file it.</p>` : ''}
+    ${rows.map(t => `
+      <div class="detail-row" role="button" tabindex="0" data-txn="${t.id}">
+        <span class="detail-name">${escapeHtml(t.note || catOf(t.cat).n)}</span>
+        <span class="detail-date">${t.date.slice(5).replace('-', '/')}</span>
+        <span class="detail-amt">${money(t.amt)}</span>
+      </div>`).join('')}
+    <div class="detail-foot">${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} · tap one to change its category</div>
+  </div>`;
 }
 
 function renderBills() {
@@ -852,7 +857,7 @@ function markBillPaid(billId) {
     k: 'add',
     x: {
       id: uid(), amt: b.amt, cat: b.cat, note: b.name,
-      date: billDueISO(b, mk), payer: b.payer, split: b.split, bill: b.id,
+      date: billDueISO(b, mk), payer: b.payer, bill: b.id,
     },
   });
   haptic();
@@ -885,7 +890,7 @@ function renderSettings() {
 function newDraft() {
   if (S.draft && S.draft.thumbUrl) URL.revokeObjectURL(S.draft.thumbUrl);
   S.draft = {
-    raw: '0', cat: 'food', note: '', date: todayISO(), payer: iAm(), split: 'both',
+    raw: '0', cat: 'food', note: '', date: todayISO(), payer: iAm(),
     photo: null, thumbUrl: null, scan: null,
   };
 }
@@ -903,10 +908,6 @@ function paintAdd() {
   const payer = $('#addPayer').children;
   payer[0].textContent = S.cfg.nameA; payer[1].textContent = S.cfg.nameB;
   [...payer].forEach(b => b.classList.toggle('on', b.dataset.v === d.payer));
-
-  const split = $('#addSplit').children;
-  split[1].textContent = `${S.cfg.nameA} only`; split[2].textContent = `${S.cfg.nameB} only`;
-  [...split].forEach(b => b.classList.toggle('on', b.dataset.v === d.split));
 
   paintScanResult();
 }
@@ -1019,7 +1020,7 @@ function saveDraft() {
     x: {
       id,
       amt: Math.round(val * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)),
-      cat: d.cat, note: d.note.trim(), date: d.date, payer: d.payer, split: d.split,
+      cat: d.cat, note: d.note.trim(), date: d.date, payer: d.payer,
       ...(d.photo ? { rcpt: 1 } : {}),
     },
   });
@@ -1052,13 +1053,8 @@ function openSheet(id) {
       <label class="field"><span>Amount</span><input id="edAmt" type="number" inputmode="decimal" step="any" value="${(ZERO_DP.has(S.cfg.cur) ? t.amt : t.amt / 100).toFixed(dp)}"></label>
       <label class="field"><span>Note</span><input id="edNote" type="text" value="${escapeHtml(t.note || '')}" placeholder="Optional"></label>
       <label class="field"><span>Date</span><input id="edDate" type="date" value="${t.date}"></label>
-      <label class="field"><span>Category</span><select id="edCat">${CATS.map(c => `<option value="${c.k}"${c.k === t.cat ? ' selected' : ''}>${c.e} ${c.n}</option>`).join('')}</select></label>
+      <label class="field"><span>Category</span><select id="edCat">${allCats().map(c => `<option value="${c.k}"${c.k === t.cat ? ' selected' : ''}>${c.e} ${escapeHtml(c.n)}</option>`).join('')}</select></label>
       <label class="field"><span>Paid by</span><select id="edPayer"><option value="a"${t.payer === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)}</option><option value="b"${t.payer === 'b' ? ' selected' : ''}>${escapeHtml(S.cfg.nameB)}</option></select></label>
-      <label class="field"><span>Split</span><select id="edSplit">
-        <option value="both"${t.split === 'both' ? ' selected' : ''}>Shared 50/50</option>
-        <option value="a"${t.split === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)} only</option>
-        <option value="b"${t.split === 'b' ? ' selected' : ''}>${escapeHtml(S.cfg.nameB)} only</option>
-      </select></label>
     </div>
     <button id="edSave" class="btn btn-primary">Save changes</button>
     <div style="height:10px"></div>
@@ -1096,13 +1092,87 @@ function openSheet(id) {
         date: $('#edDate').value || t.date,
         cat: $('#edCat').value,
         payer: $('#edPayer').value,
-        split: $('#edSplit').value,
+
       },
     });
     closeSheet(); toast('Updated'); render(); sync();
   };
 }
 const closeSheet = () => $('#sheet').classList.add('hidden');
+
+/* ── filing a transaction under a category ── */
+
+const EMOJI_CHOICES = ['📦','🍜','🛒','🏠','🚕','📱','💊','🎬','✈️','🙏','🎁','💅','👶','🐶','💻','📚','⚽','🎵','🍺','☕','💐','🔧','🧾','💸'];
+
+function openCategorySheet(txnId) {
+  const { txns } = reduceLog();
+  const t = txns.find(x => x.id === txnId);
+  if (!t) return;
+
+  const list = allCats();
+  $('#sheetBody').innerHTML = `
+    <h3 class="sheet-title">File this expense</h3>
+    <p class="sheet-sub">${escapeHtml(t.note || 'Expense')} · ${money(t.amt)} · ${dayName(t.date)}</p>
+    <div class="cat-picker">
+      ${list.map(c => `<button class="cat-pick${c.k === t.cat ? ' on' : ''}" data-pick="${c.k}">
+        <span class="cat-pick-e">${c.e}</span><span>${escapeHtml(c.n)}</span></button>`).join('')}
+    </div>
+    <button id="catNew" class="btn btn-secondary">＋ New category</button>
+    <div id="catNewForm"></div>
+    <div style="height:10px"></div>
+    <button id="catClose" class="btn btn-secondary">Cancel</button>`;
+
+  $('#sheet').classList.remove('hidden');
+  $('#catClose').onclick = closeSheet;
+
+  $('#sheetBody').querySelector('.cat-picker').onclick = e => {
+    const b = e.target.closest('[data-pick]');
+    if (!b) return;
+    applyCategory(t.id, b.dataset.pick);
+  };
+
+  $('#catNew').onclick = () => {
+    $('#catNew').classList.add('hidden');
+    $('#catNewForm').innerHTML = `
+      <div class="card" style="margin-top:12px">
+        <div class="card-head">New category</div>
+        <label class="field"><span>Name</span><input id="ncName" type="text" placeholder="e.g. Pets" autocapitalize="words"></label>
+        <div class="card-head" style="margin:14px 0 8px">Pick an icon</div>
+        <div class="emoji-grid">${EMOJI_CHOICES.map((e, i) =>
+          `<button class="emoji-pick${i === 0 ? ' on' : ''}" data-e="${e}">${e}</button>`).join('')}</div>
+      </div>
+      <button id="ncSave" class="btn btn-primary">Create and file here</button>`;
+
+    let chosen = EMOJI_CHOICES[0];
+    $('#catNewForm').querySelector('.emoji-grid').onclick = ev => {
+      const b = ev.target.closest('[data-e]');
+      if (!b) return;
+      chosen = b.dataset.e;
+      $$('.emoji-pick').forEach(x => x.classList.toggle('on', x === b));
+    };
+    setTimeout(() => $('#ncName').focus(), 150);
+
+    $('#ncSave').onclick = () => {
+      const name = $('#ncName').value.trim();
+      if (!name) { toast('Give the category a name'); return; }
+      if (allCats().some(c => c.n.toLowerCase() === name.toLowerCase())) {
+        toast('You already have one called that'); return;
+      }
+      const k = 'c' + uid().slice(0, 8);
+      appendEvent({ k: 'catadd', x: { k, e: chosen, n: name } });
+      applyCategory(t.id, k, `Created ${name}`);
+    };
+  };
+}
+
+function applyCategory(txnId, cat, msg) {
+  appendEvent({ k: 'edit', x: txnId, p: { cat } });
+  closeSheet();
+  toast(msg || `Filed under ${catOf(cat).n}`);
+  haptic();
+  render();
+  sync();
+}
 
 /* ── bill editor ── */
 
@@ -1125,10 +1195,6 @@ function openBillSheet(billId) {
       <label class="field"><span>Paid by</span><select id="bPayer">
         <option value="a"${b && b.payer === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)}</option>
         <option value="b"${b && b.payer === 'b' ? ' selected' : ''}>${escapeHtml(S.cfg.nameB)}</option></select></label>
-      <label class="field"><span>Split</span><select id="bSplit">
-        <option value="both"${!b || b.split === 'both' ? ' selected' : ''}>Shared 50/50</option>
-        <option value="a"${b && b.split === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)} only</option>
-        <option value="b"${b && b.split === 'b' ? ' selected' : ''}>${escapeHtml(S.cfg.nameB)} only</option></select></label>
     </div>
     ${b && st.state !== 'paid' ? '<button id="bPay" class="btn btn-primary">Mark paid for ' + escapeHtml(monthName(S.month)) + '</button><div style="height:10px"></div>' : ''}
     ${b && st.state === 'paid' ? '<button id="bUnpay" class="btn btn-secondary">Undo this month\'s payment</button><div style="height:10px"></div>' : ''}
@@ -1155,7 +1221,7 @@ function openBillSheet(billId) {
       name, amt: Math.round(amt * unit), day,
       cc: ccVal > 0 ? Math.min(Math.round(ccVal * unit), Math.round(amt * unit)) : 0,
       grp: $('#bGrp').value.trim() || null,
-      cat: $('#bCat').value, payer: $('#bPayer').value, split: $('#bSplit').value,
+      cat: $('#bCat').value, payer: $('#bPayer').value,
     };
     if (b) appendEvent({ k: 'bedit', x: b.id, p: payload });
     else   appendEvent({ k: 'badd', x: { id: uid(), seq: bills.reduce((m, x) => Math.max(m, x.seq ?? 0), 0) + 1, ...payload } });
@@ -1291,7 +1357,7 @@ async function onStatementFile(file) {
               <td>${escapeHtml(r.desc.slice(0, 34))}${r.bill ? `<br><span class="prev-grp">matches ${escapeHtml(r.bill.name)}</span>`
                     : r.dup ? '<br><span class="prev-grp">already imported</span>'
                     : r.skip ? '<br><span class="prev-grp">not a charge</span>' : ''}</td>
-              <td>${r.use ? `${(CAT[r.cat] || CAT.misc).e} ${money(r.cents)}` : money(r.cents)}</td>
+              <td>${r.use ? `${catOf(r.cat).e} ${money(r.cents)}` : money(r.cents)}</td>
             </tr>`).join('')}</tbody>
         </table>
       </div>
@@ -1314,7 +1380,7 @@ async function onStatementFile(file) {
           id: uid(), amt: r.cents, cat: r.bill ? (r.bill.cat || 'bill') : r.cat,
           note: r.desc.slice(0, 60), date: r.date,
           payer: r.bill ? r.bill.payer : iAm(),
-          split: r.bill ? r.bill.split : 'both',
+
           sk: r.sk, ...(r.bill ? { bill: r.bill.id } : {}),
         },
       });
@@ -1404,7 +1470,7 @@ Netflix&#9;78&#9;3"></textarea>
             amt: Math.round(r.amount * unit),
             cc: r.cc ? Math.round(r.cc * unit) : 0,
             grp: r.grp || null, seq: base + i,
-            day: r.day, cat: 'bill', payer: iAm(), split: 'both',
+            day: r.day, cat: 'bill', payer: iAm(),
           },
         });
       });
@@ -1424,9 +1490,9 @@ async function exportCsv() {
   const rows = [['Date', 'Category', 'Note', `Amount (${S.cfg.cur})`, 'Paid by', 'Split'].map(esc).join(',')];
   for (const t of [...txns].reverse()) {
     rows.push([
-      t.date, (CAT[t.cat] || CAT.misc).n, t.note || '',
+      t.date, catOf(t.cat).n, t.note || '',
       (ZERO_DP.has(S.cfg.cur) ? t.amt : t.amt / 100).toFixed(ZERO_DP.has(S.cfg.cur) ? 0 : 2),
-      nameOf(t.payer), t.split === 'both' ? 'Shared' : nameOf(t.split) + ' only',
+      nameOf(t.payer), catOf(t.cat).n,
     ].map(esc).join(','));
   }
   const csv  = rows.join('\n');
@@ -1565,15 +1631,19 @@ function wireEvents() {
   $('#monthNext').addEventListener('click', () => { S.month = shiftMonth(S.month, 1); renderHome(); });
   $('#syncPill').addEventListener('click', () => sync({ quiet: false }));
 
-  // tapping a bar filters History to that category
+  // tapping a bar expands it; tapping a line inside files that expense
   $('#catChart').addEventListener('click', e => {
-    const b = e.target.closest('[data-cat]');
-    if (!b) return;
-    const c = CAT[b.dataset.cat] || CAT.misc;
-    S.histQuery = c.n;
-    $('#histSearch').value = c.n;
-    go('hist');
+    const txn = e.target.closest('[data-txn]');
+    if (txn) { openCategorySheet(txn.dataset.txn); return; }
+    const bar = e.target.closest('[data-cat]');
+    if (!bar) return;
+    S.openCat = S.openCat === bar.dataset.cat ? null : bar.dataset.cat;
+    renderHome();
     haptic();
+    if (S.openCat) {
+      const el = $(`.chart-item.open`);
+      if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
   });
 
   // add view
@@ -1588,10 +1658,6 @@ function wireEvents() {
     const b = e.target.closest('button[data-v]'); if (!b) return;
     S.draft.payer = b.dataset.v; paintAdd();
   });
-  $('#addSplit').addEventListener('click', e => {
-    const b = e.target.closest('button[data-v]'); if (!b) return;
-    S.draft.split = b.dataset.v; paintAdd();
-  });
   $('#addNote').addEventListener('input', e => { S.draft.note = e.target.value; });
   $('#addDate').addEventListener('change', e => { S.draft.date = e.target.value || todayISO(); });
   $('#addSave').addEventListener('click', saveDraft);
@@ -1602,12 +1668,6 @@ function wireEvents() {
   $('#scanInput').addEventListener('change', e => onScanFile(e.target.files && e.target.files[0]));
   $('#scanCancel').addEventListener('click', () => { scanAborted = true; hideScan(); });
 
-  // settle
-  $('#settleBtn').addEventListener('click', () => {
-    appendEvent({ k: 'settle' });
-    toast('Settled up — back to zero');
-    render(); sync();
-  });
 
   // bills
   $('#billAdd').addEventListener('click', () => openBillSheet(null));

@@ -63,10 +63,22 @@ token also works and is simpler.
 
 - **Add** — tap an amount, pick a category, choose who paid and how it splits
 - **Scan a receipt** — photograph or pick a bill and it fills the amount, shop, date and category in
-- **Home** — month total, budget, settle-up, category breakdown, who paid what
+- **Home** — month total, budget, category chart, who paid what
 - **History** — search, tap any row to edit, delete, or view its receipt (🧾)
-- **Settle up** — running "who owes whom" across all time; *Mark as settled* zeroes it
 - **Export** — CSV out of the History tab
+
+There is deliberately no "who owes whom". This is a shared record of what the two
+of you spend and a reminder to pay it — not a ledger of debts between you.
+
+## The category chart
+
+Home ranks the month's spending by category. Tap a bar to open it: the entries
+appear underneath, largest first. Tap any entry to re-file it, and anything the
+importer couldn't identify lands in **Other** with a prompt to sort it out.
+
+Categories are extensible — **New category** in that picker adds one with your own
+name and icon. Custom categories ride in the same event log, so they appear on
+both phones.
 
 ## Scanning receipts
 
