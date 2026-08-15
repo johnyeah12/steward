@@ -104,12 +104,28 @@ it stands.
 
 ## Monthly bills and reminders
 
-The **Bills** tab holds recurring commitments — rent, utilities, subscriptions —
-each with an amount and a day of the month. Tap **Paste** to bring in a whole list
-at once; it reads spreadsheet tabs, CSV, markdown tables, column-aligned text, or
-plain lines like `Netflix 78 15th`, and maps columns by header when there is one.
-You always get a preview first, with unusable rows flagged and skipped rather than
-guessed at.
+The **Bills** tab is the monthly budget: what's committed, what's on the card, and
+what has a date attached.
+
+Tap **Paste** to bring in a whole budget at once. It handles a real spreadsheet,
+not just a tidy three-column list:
+
+- **Sections** — an all-caps row with no figures (`HK HOUSEHOLD`) becomes a heading,
+  and each section gets its own subtotal
+- **A "via CC" column** — the portion of each line charged to a credit card, rolled
+  up per section and across the whole budget. A tick or `yes` means the whole line.
+- **Due days embedded in labels** — `7: Pueblo Del Sol BOC BDO` becomes day 7
+- **Undated lines** — tithes, rent, weekly grocery allowances. These are budgeted
+  and totalled, but never chased for a date they don't have.
+- **Its own totals row** — recognised and skipped, not imported as a bill
+
+It also reads plain tabs, CSV, markdown tables, column-aligned text, and lines like
+`Netflix 78 15th`, mapping columns by header when there is one.
+
+You always get a preview with per-row results and running totals, so you can check
+them against your sheet before anything is imported. Rows it can't read are flagged
+in red and skipped. Lines already in your list are skipped too — so pasting twice,
+or pasting the same sheet on both phones, can't silently double your budget.
 
 Home shows what's due, one tap marks a bill paid, and paying it logs a real
 expense dated to the due day — so it lands in the month it belongs to even if you

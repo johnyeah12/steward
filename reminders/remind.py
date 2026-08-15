@@ -192,8 +192,12 @@ def main():
     lead = int(cfg.get("lead") or 3)
     cur = cfg.get("cur") or "HKD"
 
+    # Undated lines are monthly allocations (groceries, tithes) — budgeted,
+    # but there is no date to chase, so they are never nagged about.
+    dated = [b for b in bills if b.get("day")]
+
     hits = []
-    for bill in sorted(bills, key=lambda b: int(b.get("day", 1))):
+    for bill in sorted(dated, key=lambda b: int(b["day"])):
         if paid_this_month(bill, txns, today):
             continue
         days = (due_date(bill, today) - today).days
@@ -201,7 +205,8 @@ def main():
             hits.append((days, bill))
 
     if not hits:
-        print(f"{len(bills)} bill(s) checked, nothing due within {lead} day(s).")
+        print(f"{len(dated)} dated bill(s) checked "
+              f"({len(bills) - len(dated)} undated), nothing due within {lead} day(s).")
         return 0
 
     def phrase(d):
@@ -213,16 +218,23 @@ def main():
             return f"{-d} day{'s' if d != -1 else ''} late"
         return f"due in {d} days"
 
-    lines, total = [], 0
-    for days, bill in sorted(hits):
-        total += int(bill.get("amt", 0))
+    lines, total, on_card = [], 0, 0
+    # sort on the day only — several bills commonly share a due date, and
+    # tuple comparison would otherwise fall through to comparing dicts
+    for days, bill in sorted(hits, key=lambda h: (h[0], h[1].get("name", ""))):
+        amt = int(bill.get("amt", 0))
+        cc = int(bill.get("cc") or 0)
+        total += amt
+        on_card += cc
         mark = "⚠️" if days < 0 else ("\U0001f514" if days <= 1 else "\U0001f4c5")
-        lines.append(f"{mark} {bill.get('name', 'Bill')} — {money(int(bill.get('amt', 0)), cur)} · {phrase(days)}")
+        card = " · 💳 on card" if cc >= amt > 0 else (f" · 💳 {money(cc, cur)} on card" if cc else "")
+        lines.append(f"{mark} {bill.get('name', 'Bill')} — {money(amt, cur)} · {phrase(days)}{card}")
 
     late = sum(1 for d, _ in hits if d < 0)
     subject = f"{len(hits)} bill{'s' if len(hits) != 1 else ''} to pay" + (f" ({late} late)" if late else "")
     body = ("\n".join(lines)
             + f"\n\nTotal outstanding: {money(total, cur)}"
+            + (f"\nOf that, on the card: {money(on_card, cur)}" if on_card else "")
             + "\n\nOpen Steward to mark them paid.")
 
     print(subject)

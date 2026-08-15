@@ -220,7 +220,10 @@ function reduceLog() {
     else if (e.k === 'bdel')  bmap.delete(e.x);
   }
   const txns = [...map.values()].sort((x, y) => (y.date < x.date ? -1 : y.date > x.date ? 1 : y._born - x._born));
-  const bills = [...bmap.values()].sort((x, y) => x.day - y.day || (x.name > y.name ? 1 : -1));
+  // Keep the order things were entered — for a pasted budget that is the
+  // order of the original sheet, which is how its owner reads it.
+  const bills = [...bmap.values()].sort((x, y) =>
+    (x.seq ?? 1e9) - (y.seq ?? 1e9) || (x.name > y.name ? 1 : -1));
   return { txns, bills, settledAt };
 }
 
@@ -231,11 +234,13 @@ const billDueISO = (bill, mk) => `${mk}-${String(Math.min(bill.day, daysInMonth(
 const daysBetween = (from, to) =>
   Math.round((Date.parse(to + 'T00:00:00') - Date.parse(from + 'T00:00:00')) / 864e5);
 
-/** Where a bill stands for a given month: paid, late, due soon, or still ahead. */
+/** Where a bill stands for a given month: paid, late, due soon, or still ahead.
+    Bills with no due day are plain monthly allocations — tracked, never chased. */
 function billStatus(bill, txns, mk, today = todayISO(), lead = leadDays()) {
-  const due = billDueISO(bill, mk);
   const paid = txns.find(t => t.bill === bill.id && monthKey(t.date) === mk);
-  if (paid) return { state: 'paid', due, txn: paid };
+  if (paid) return { state: 'paid', due: bill.day ? billDueISO(bill, mk) : null, txn: paid };
+  if (!bill.day) return { state: 'open', due: null, days: null };
+  const due = billDueISO(bill, mk);
   const days = daysBetween(today, due);
   if (days < 0)     return { state: 'late', due, days };
   if (days <= lead) return { state: 'soon', due, days };
@@ -256,6 +261,7 @@ const leadDays = () => Number(sharedSettings().lead || (S.cfg && S.cfg.lead)) ||
 
 function dueLabel(st) {
   if (st.state === 'paid') return 'Paid';
+  if (st.state === 'open') return 'Not paid';
   if (st.days === 0)  return 'Due today';
   if (st.days === 1)  return 'Due tomorrow';
   if (st.days === -1) return '1 day late';
@@ -265,9 +271,27 @@ function dueLabel(st) {
 
 /* ── pasting a table out of a spreadsheet, Notes, or an email ── */
 
-const HEAD_NAME = /^(name|bill|item|description|desc|payee|what|vendor|merchant)$/i;
-const HEAD_AMT  = /^(amount|amt|cost|price|total|sum|monthly|value|hk\$?|\$|fee)$/i;
+const HEAD_NAME = /^(name|bill|item|description|desc|payee|what|vendor|merchant|expense)s?$/i;
+const HEAD_AMT  = /^(planned|budget|allocated|allocation|amount|amt|cost|price|total|sum|monthly|value|hk\$?|\$|fee)$/i;
+const HEAD_CC   = /(via\s*cc|credit\s*card|on\s*card|^cc$|^card$|charged)/i;
 const HEAD_DAY  = /^(due|day|date|due day|due date|dom|when)$/i;
+const TOTALS_ROW = /^(totals?|sum|grand\s*total|subtotal)$/i;
+
+/** "7: Pueblo Del Sol BOC BDO" → day 7. Plenty of budgets encode the date this way. */
+function stripDayPrefix(name) {
+  const m = String(name).match(/^\s*(\d{1,2})\s*[:.\)-]\s*(.+)$/);
+  if (!m) return { name: String(name).trim(), day: null };
+  const d = +m[1];
+  return d >= 1 && d <= 31 ? { name: m[2].trim(), day: d } : { name: String(name).trim(), day: null };
+}
+
+/** A section heading like "HK HOUSEHOLD" — no figures, and shouting. */
+function isSectionRow(cells) {
+  const filled = cells.filter(c => c !== '');
+  if (filled.length !== 1) return false;
+  const t = filled[0];
+  return t.length >= 3 && !/\d/.test(t) && t === t.toUpperCase() && /[A-Z]/.test(t);
+}
 
 function splitCells(line, delim) {
   let cells;
@@ -303,32 +327,54 @@ function toDay(s) {
  * nothing is imported without the user seeing it first.
  */
 function parseBillTable(text) {
-  const raw = String(text || '').split(/\r?\n/).map(l => l.trim())
-    .filter(l => l && !/^[|+\s:-]+$/.test(l));          // drop markdown rules
+  const raw = String(text || '').split(/\r?\n/)
+    .filter(l => l.trim() && !/^[|+\s:-]+$/.test(l));   // drop blanks + markdown rules
   if (!raw.length) return [];
 
-  const has = (re) => raw.filter(l => re.test(l)).length / raw.length > 0.5;
+  const has = (re) => raw.filter(l => re.test(l)).length / raw.length > 0.4;
   const delim = has(/\t/) ? '\t' : has(/\|/) ? '|' : has(/,/) ? ',' : has(/\s{2,}/) ? '  ' : null;
 
-  let rows = delim ? raw.map(l => splitCells(l, delim)) : raw.map(l => [l]);
+  let rows = delim ? raw.map(l => splitCells(l, delim)) : raw.map(l => [l.trim()]);
 
-  // header?
-  let idx = { name: 0, amt: 1, day: 2 };
-  const first = rows[0];
-  const looksHeader = first.length > 1 &&
-    first.some(c => HEAD_NAME.test(c) || HEAD_AMT.test(c) || HEAD_DAY.test(c)) &&
-    !first.some(c => toAmount(c) !== null && /^\W*\d/.test(c));
-  if (looksHeader) {
-    first.forEach((c, i) => {
-      if (HEAD_NAME.test(c)) idx.name = i;
-      else if (HEAD_AMT.test(c)) idx.amt = i;
-      else if (HEAD_DAY.test(c)) idx.day = i;
+  // Find a header row anywhere in the first few lines — real budgets often
+  // start with a title line above the actual column names.
+  let idx = { name: 0, amt: 1, cc: -1, day: -1 };
+  let headerAt = -1;
+  for (let i = 0; i < Math.min(rows.length, 5); i++) {
+    const r = rows[i];
+    if (r.length < 2) continue;
+    if (r.some(c => c && (HEAD_AMT.test(c) || HEAD_CC.test(c) || HEAD_DAY.test(c)))) { headerAt = i; break; }
+  }
+  if (headerAt >= 0) {
+    const hdr = rows[headerAt];
+    let sawName = false;
+    hdr.forEach((c, i) => {
+      if (!c) return;
+      if (HEAD_CC.test(c))        idx.cc = i;
+      else if (HEAD_DAY.test(c))  idx.day = i;
+      else if (HEAD_AMT.test(c))  idx.amt = i;
+      else if (HEAD_NAME.test(c)) { idx.name = i; sawName = true; }
     });
-    rows = rows.slice(1);
+    if (!sawName) idx.name = 0;               // labels usually sit in column A
+    rows = rows.slice(headerAt + 1);
   }
 
-  return rows.map(cells => {
-    let name = null, amount = null, day = null;
+  let group = null;
+  const out = [];
+
+  for (const cells of rows) {
+    if (!cells.some(c => c !== '')) continue;
+
+    if (isSectionRow(cells)) { group = cells.find(c => c !== ''); continue; }
+    if (TOTALS_ROW.test((cells[0] || '').trim())) continue;   // their own totals row
+
+    out.push(parseBillRow(cells, idx, group));
+  }
+  return out;
+}
+
+function parseBillRow(cells, idx, group) {
+    let name = null, amount = null, day = null, cc = null;
 
     if (cells.length === 1) {
       // "Netflix 78 15th"  /  "Netflix $78 due 15"
@@ -348,21 +394,49 @@ function parseBillTable(text) {
     } else {
       name   = (cells[idx.name] || '').replace(/[*_`]/g, '').trim() || null;
       amount = toAmount(cells[idx.amt]);
-      day    = toDay(cells[idx.day]);
+      if (idx.day >= 0) day = toDay(cells[idx.day]);
+
+      if (idx.cc >= 0) {
+        const raw = (cells[idx.cc] || '').trim();
+        if (raw) {
+          const v = toAmount(raw);
+          // a tick or a "yes" means the whole line goes on the card
+          cc = v != null ? v : (/^(y|yes|x|✓|✔|true|cc)$/i.test(raw) ? amount : null);
+        }
+      }
+
       // columns not where we guessed — recover by shape
-      if (amount == null) for (const c of cells) { const v = toAmount(c); if (v != null && c !== cells[idx.day]) { amount = v; break; } }
-      if (day == null)    for (let i = cells.length - 1; i > 0; i--) { const d = toDay(cells[i]); if (d != null && toAmount(cells[i]) !== amount) { day = d; break; } }
+      if (amount == null) {
+        for (let i = 0; i < cells.length; i++) {
+          if (i === idx.cc || i === idx.day) continue;
+          const v = toAmount(cells[i]);
+          if (v != null) { amount = v; break; }
+        }
+      }
+      if (day == null && idx.day < 0 && cells.length > 2) {
+        for (let i = cells.length - 1; i > 0; i--) {
+          if (i === idx.amt || i === idx.cc) continue;
+          const d = toDay(cells[i]);
+          if (d != null) { day = d; break; }
+        }
+      }
       if (!name) name = cells.find(c => /[A-Za-z一-鿿]{2,}/.test(c)) || null;
     }
 
-    const issues = [];
-    if (!name)            issues.push('no name');
-    if (amount == null)   issues.push('no amount');
-    if (day == null)      issues.push('no due day');
-    else if (day < 1 || day > 31) issues.push('day out of range');
+    // a leading "7:" on the label is a due day
+    if (name) {
+      const s = stripDayPrefix(name);
+      name = s.name;
+      if (day == null) day = s.day;
+    }
+    if (cc != null && amount != null && cc > amount) cc = amount;
 
-    return { name, amount, day, ok: issues.length === 0, issues };
-  });
+    const issues = [];
+    if (!name)          issues.push('no name');
+    if (amount == null) issues.push('no amount');
+    if (day != null && (day < 1 || day > 31)) { issues.push('day out of range'); day = null; }
+
+    return { name, amount, day, cc, grp: group || null, ok: issues.length === 0, issues };
 }
 
 /** Net balance in cents. Positive ⇒ person A is owed. */
@@ -657,12 +731,14 @@ function renderBills() {
   const mk = S.month;
 
   const total = bills.reduce((s, b) => s + b.amt, 0);
+  const onCard = bills.reduce((s, b) => s + (b.cc || 0), 0);
   $('#billTotal').textContent = bills.length ? money(total) : '—';
 
   const states = bills.map(b => billStatus(b, txns, mk));
   const unpaidCount = states.filter(s => s.state !== 'paid').length;
-  $('#billUnpaid').textContent = bills.length
-    ? (unpaidCount ? `${unpaidCount} still to pay in ${monthName(mk)}` : `All paid for ${monthName(mk)} 🎉`)
+  $('#billUnpaid').innerHTML = bills.length
+    ? (onCard ? `💳 ${money(onCard)} of it on the card · ` : '') +
+      (unpaidCount ? `${unpaidCount} still to pay` : `all paid for ${monthName(mk)} 🎉`)
     : '';
   $('#billUnpaid').className = 'hero-delta' + (bills.length && !unpaidCount ? ' down' : '');
 
@@ -671,26 +747,40 @@ function renderBills() {
     return;
   }
 
-  const PILL = { paid: 'pill-paid', soon: 'pill-soon', late: 'pill-late', idle: 'pill-idle' };
-  $('#billList').innerHTML = `
-    <div class="bill-group">
-      <div class="bill-group-hd">${escapeHtml(monthName(mk))}</div>
+  const PILL = { paid: 'pill-paid', soon: 'pill-soon', late: 'pill-late', idle: 'pill-idle', open: 'pill-idle' };
+
+  // keep the sections from the sheet, in the order they first appear
+  const groups = [];
+  bills.forEach((b, i) => {
+    const key = b.grp || 'Other';
+    let g = groups.find(x => x.key === key);
+    if (!g) groups.push(g = { key, rows: [] });
+    g.rows.push({ b, st: states[i] });
+  });
+
+  $('#billList').innerHTML = groups.map(g => {
+    const sub = g.rows.reduce((s, r) => s + r.b.amt, 0);
+    const subCC = g.rows.reduce((s, r) => s + (r.b.cc || 0), 0);
+    return `<div class="bill-group">
+      <div class="bill-group-hd">
+        <span>${escapeHtml(g.key)}</span>
+        <span class="bill-group-sum">${money(sub)}${subCC ? ` · 💳 ${money(subCC)}` : ''}</span>
+      </div>
       <div class="bill-items">
-        ${bills.map((b, i) => {
-          const st = states[i];
-          return `<button class="bill-row" data-bill="${b.id}">
+        ${g.rows.map(({ b, st }) => `
+          <button class="bill-row" data-bill="${b.id}">
             <span>
               <span class="bill-name">${escapeHtml(b.name)}</span>
-              <span class="bill-when">${(CAT[b.cat] || CAT.misc).e} Due the ${ordinal(b.day)}</span>
+              <span class="bill-when">${b.day ? 'Due the ' + ordinal(b.day) : 'Monthly'}${b.cc ? ' · 💳 ' + money(b.cc) : ''}</span>
             </span>
             <span class="bill-right">
               <span class="bill-amt">${money(b.amt)}</span>
               <span class="pill ${PILL[st.state]}">${dueLabel(st)}</span>
             </span>
-          </button>`;
-        }).join('')}
+          </button>`).join('')}
       </div>
     </div>`;
+  }).join('');
 }
 
 const ordinal = n => n + (['th','st','nd','rd'][(n % 100 - 20) % 10] || ['th','st','nd','rd'][n % 100] || 'th');
@@ -992,7 +1082,9 @@ function openBillSheet(billId) {
     <div class="card">
       <label class="field"><span>Name</span><input id="bName" type="text" value="${b ? escapeHtml(b.name) : ''}" placeholder="e.g. Internet" autocapitalize="words"></label>
       <label class="field"><span>Amount (${S.cfg.cur})</span><input id="bAmt" type="number" inputmode="decimal" step="any" value="${b ? (ZERO_DP.has(S.cfg.cur) ? b.amt : b.amt / 100).toFixed(dp) : ''}" placeholder="0"></label>
-      <label class="field"><span>Due day</span><input id="bDay" type="number" inputmode="numeric" min="1" max="31" value="${b ? b.day : ''}" placeholder="1–31"></label>
+      <label class="field"><span>On card</span><input id="bCC" type="number" inputmode="decimal" step="any" value="${b && b.cc ? (ZERO_DP.has(S.cfg.cur) ? b.cc : b.cc / 100).toFixed(dp) : ''}" placeholder="0 = not on card"></label>
+      <label class="field"><span>Section</span><input id="bGrp" type="text" value="${b && b.grp ? escapeHtml(b.grp) : ''}" placeholder="e.g. HK HOUSEHOLD" autocapitalize="characters"></label>
+      <label class="field"><span>Due day</span><input id="bDay" type="number" inputmode="numeric" min="1" max="31" value="${b && b.day ? b.day : ''}" placeholder="blank = no reminder"></label>
       <label class="field"><span>Category</span><select id="bCat">${CATS.map(c => `<option value="${c.k}"${b && c.k === b.cat ? ' selected' : (!b && c.k === 'bill' ? ' selected' : '')}>${c.e} ${c.n}</option>`).join('')}</select></label>
       <label class="field"><span>Paid by</span><select id="bPayer">
         <option value="a"${b && b.payer === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)}</option>
@@ -1015,17 +1107,22 @@ function openBillSheet(billId) {
   $('#bSave').onclick = () => {
     const name = $('#bName').value.trim();
     const amt = parseFloat($('#bAmt').value);
-    const day = parseInt($('#bDay').value, 10);
-    if (!name)                       { toast('Give the bill a name'); return; }
-    if (!amt || amt <= 0)            { toast('Enter an amount'); return; }
-    if (!(day >= 1 && day <= 31))    { toast('Due day must be 1–31'); return; }
+    const dayRaw = $('#bDay').value.trim();
+    const day = dayRaw === '' ? null : parseInt(dayRaw, 10);
+    if (!name)                                   { toast('Give the bill a name'); return; }
+    if (!amt || amt <= 0)                        { toast('Enter an amount'); return; }
+    if (day !== null && !(day >= 1 && day <= 31)) { toast('Due day must be 1–31, or blank'); return; }
 
+    const unit = ZERO_DP.has(S.cfg.cur) ? 1 : 100;
+    const ccVal = parseFloat($('#bCC').value);
     const payload = {
-      name, amt: Math.round(amt * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)), day,
+      name, amt: Math.round(amt * unit), day,
+      cc: ccVal > 0 ? Math.min(Math.round(ccVal * unit), Math.round(amt * unit)) : 0,
+      grp: $('#bGrp').value.trim() || null,
       cat: $('#bCat').value, payer: $('#bPayer').value, split: $('#bSplit').value,
     };
     if (b) appendEvent({ k: 'bedit', x: b.id, p: payload });
-    else   appendEvent({ k: 'badd', x: { id: uid(), ...payload } });
+    else   appendEvent({ k: 'badd', x: { id: uid(), seq: bills.reduce((m, x) => Math.max(m, x.seq ?? 0), 0) + 1, ...payload } });
     closeSheet(); toast(b ? 'Bill updated' : 'Bill added'); render(); sync();
   };
 
@@ -1062,10 +1159,25 @@ Netflix&#9;78&#9;3"></textarea>
 
   $('#pasteGo').onclick = () => {
     const rows = parseBillTable($('#pasteBox').value);
-    const good = rows.filter(r => r.ok);
     const out = $('#pasteOut');
-
     if (!rows.length) { out.innerHTML = '<p class="card-note" style="margin-top:14px">Nothing to read yet.</p>'; return; }
+
+    // Guard against pasting twice — or against both phones importing the same
+    // sheet, which would otherwise merge into two of everything.
+    const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const existing = new Set(reduceLog().bills.map(b => norm(b.name)));
+    for (const r of rows) {
+      if (r.ok && existing.has(norm(r.name))) { r.ok = false; r.dup = true; r.issues = ['already added']; }
+    }
+
+    const good = rows.filter(r => r.ok);
+    const dupes = rows.filter(r => r.dup).length;
+
+    const unit = ZERO_DP.has(S.cfg.cur) ? 1 : 100;
+    const sumPlanned = good.reduce((s, r) => s + Math.round(r.amount * unit), 0);
+    const sumCard = good.reduce((s, r) => s + (r.cc ? Math.round(r.cc * unit) : 0), 0);
+    const anyCard = good.some(r => r.cc);
+    const sections = [...new Set(good.map(r => r.grp).filter(Boolean))];
 
     out.innerHTML = `
       <div style="height:16px"></div>
@@ -1073,31 +1185,42 @@ Netflix&#9;78&#9;3"></textarea>
         <div class="card-head">${good.length} of ${rows.length} ready</div>
         <div class="preview-wrap">
           <table class="preview-table">
-            <thead><tr><th>Name</th><th>Due</th><th>Amount</th></tr></thead>
+            <thead><tr><th>Name</th><th>Due</th>${anyCard ? '<th>Card</th>' : ''}<th>Planned</th></tr></thead>
             <tbody>${rows.map(r => `
               <tr class="${r.ok ? '' : 'row-bad'}">
-                <td>${escapeHtml(r.name || '—')}</td>
+                <td>${escapeHtml(r.name || '—')}${r.grp ? `<br><span class="prev-grp">${escapeHtml(r.grp)}</span>` : ''}</td>
                 <td>${r.day ? ordinal(r.day) : '—'}</td>
-                <td>${r.ok ? money(Math.round(r.amount * (ZERO_DP.has(S.cfg.cur) ? 1 : 100))) : escapeHtml(r.issues.join(', '))}</td>
+                ${anyCard ? `<td>${r.cc ? money(Math.round(r.cc * unit)) : '—'}</td>` : ''}
+                <td>${r.ok ? money(Math.round(r.amount * unit)) : escapeHtml(r.issues.join(', '))}</td>
               </tr>`).join('')}</tbody>
           </table>
         </div>
+        <div class="preview-total">
+          <span>Total planned</span><span>${money(sumPlanned)}</span>
+        </div>
+        ${anyCard ? `<div class="preview-total"><span>Of that, on the card</span><span>${money(sumCard)}</span></div>` : ''}
+        ${sections.length ? `<p class="card-note" style="margin:10px 0 0">${sections.length} section${sections.length === 1 ? '' : 's'}: ${escapeHtml(sections.join(' · '))}</p>` : ''}
       </div>
       ${good.length ? `<button id="pasteImport" class="btn btn-primary">Import ${good.length} bill${good.length === 1 ? '' : 's'}</button>` : ''}
-      ${rows.length > good.length ? '<p class="card-note" style="margin-top:12px">Rows in red are skipped — fix them above and preview again, or add those by hand.</p>' : ''}`;
+      ${dupes ? `<p class="card-note" style="margin-top:12px">${dupes} already in your list and skipped, so nothing gets doubled up. Edit those on the Bills tab instead.</p>` : ''}
+      ${rows.length > good.length + dupes ? '<p class="card-note" style="margin-top:12px">Rows in red could not be read — fix them above and preview again, or add those by hand.</p>' : ''}`;
 
     if (!good.length) return;
     $('#pasteImport').onclick = () => {
-      for (const r of good) {
+      const unit = ZERO_DP.has(S.cfg.cur) ? 1 : 100;
+      const base = reduceLog().bills.reduce((m, b) => Math.max(m, b.seq ?? 0), 0) + 1;
+      good.forEach((r, i) => {
         appendEvent({
           k: 'badd',
           x: {
             id: uid(), name: r.name,
-            amt: Math.round(r.amount * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)),
+            amt: Math.round(r.amount * unit),
+            cc: r.cc ? Math.round(r.cc * unit) : 0,
+            grp: r.grp || null, seq: base + i,
             day: r.day, cat: 'bill', payer: iAm(), split: 'both',
           },
         });
-      }
+      });
       closeSheet();
       toast(`${good.length} bill${good.length === 1 ? '' : 's'} imported`);
       render(); sync();

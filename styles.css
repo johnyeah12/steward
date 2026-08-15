@@ -275,9 +275,11 @@ button { background: none; border: 0; cursor: pointer; }
 
 .bill-group { margin-bottom: 18px; }
 .bill-group-hd {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
   font-size: 13px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .5px; color: var(--txt-2); padding: 0 4px 8px;
 }
+.bill-group-sum { font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: 0; text-transform: none; }
 .bill-items { background: var(--bg-elev); border-radius: var(--radius); overflow: hidden; }
 .bill-row {
   display: grid; grid-template-columns: 1fr auto;
@@ -331,6 +333,14 @@ button { background: none; border: 0; cursor: pointer; }
 .preview-table td { padding: 7px 8px 7px 0; border-top: .5px solid var(--sep); }
 .preview-table td:last-child, .preview-table th:last-child { text-align: right; padding-right: 0; }
 .row-bad td { color: var(--red); }
+.prev-grp { font-size: 11px; color: var(--txt-3); text-transform: uppercase; letter-spacing: .3px; }
+.preview-total {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 14px; padding: 9px 0 0; margin-top: 4px;
+  border-top: .5px solid var(--sep);
+  font-variant-numeric: tabular-nums;
+}
+.preview-total span:last-child { font-weight: 600; }
 .preview-wrap { max-height: 220px; overflow-y: auto; margin-bottom: 4px; }
 
 /* ─────────── Receipt scanning ─────────── */
