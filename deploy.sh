@@ -116,7 +116,11 @@ echo "  Data repo  $USER/$DATA_REPO  (private)"
 echo
 echo "  Pages takes a minute or two to go live on the very first deploy."
 echo
-bold "Next: create the access token"
+bold "First time only: create the access token"
+echo "  Skip this if you've already set the app up — the token is stored"
+echo "  encrypted on each phone and survives redeploys. You only need a new"
+echo "  one if it expires, you revoke it, or you sign out of a phone."
+echo
 echo "  1. Open  https://github.com/settings/personal-access-tokens/new"
 echo "  2. Name it Steward, set an expiry you're happy with"
 echo "  3. Repository access → Only select repositories → $DATA_REPO"
@@ -125,6 +129,9 @@ echo "  5. Generate, copy the token"
 echo
 echo "  Then open $URL on both phones, Share → Add to Home Screen,"
 echo "  and run through setup with the same repo, token and passcode."
+echo
+echo "  Already set up? Nothing to do — just open the app. It refreshes"
+echo "  itself to this build, and your passcode and data are unchanged."
 echo
 bold "Then, for bill reminders"
 echo "  ./setup-reminders.sh"
