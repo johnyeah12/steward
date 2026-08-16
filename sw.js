@@ -4,7 +4,7 @@
 
 // Bumped automatically by deploy.sh — a stale value here is why an installed
 // phone keeps serving the previous build.
-const VERSION = 'steward-20260816120944';
+const VERSION = 'steward-20260816121525';
 const SHELL = [
   './',
   './index.html',
