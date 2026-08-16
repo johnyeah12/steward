@@ -430,6 +430,8 @@ button { background: none; border: 0; cursor: pointer; }
   transition: background .12s;
 }
 .bill-row:last-child { border-bottom: 0; }
+/* let the name ellipsis rather than shoving the amount out of view */
+.bill-row > span:first-child { min-width: 0; }
 .bill-row:active { background: var(--tint-soft); }
 .bill-name { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bill-when { display: block; font-size: 13.5px; color: var(--txt-2); margin-top: 3px; }

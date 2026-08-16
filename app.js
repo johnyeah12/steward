@@ -903,6 +903,7 @@ function renderUptown() {
         </div>`).join('')
     : `<div class="empty">${empty}</div>`;
 
+  renderUptownBills(mk, txns);
   renderUptownFees(month);
   $('#upIn').innerHTML  = list(month.filter(isIncome), 'No earnings logged for this month');
   $('#upOut').innerHTML = list(month.filter(isSpend),  'No costs logged for this month');
@@ -1084,6 +1085,44 @@ async function onAirbnbFile(file) {
     toast(`${usable.length} booking${usable.length === 1 ? '' : 's'} imported`);
     haptic(); render(); sync();
   };
+}
+
+/**
+ * The flat's own recurring bills — association dues, the loan, Meralco, PLDT.
+ *
+ * They still live on the Bills tab with everything else; this is the same
+ * bills seen from the flat's side, so its running costs sit next to what it
+ * earns. Amounts are shown as stored, not converted: these came from the
+ * household budget and their original currency is not recorded.
+ */
+function renderUptownBills(mk, txns) {
+  const { bills } = reduceLog();
+  const mine = bills.filter(b => b.prop === 'uptown' || (b.prop !== 'no' && UPTOWN_AUTO.test(b.name)));
+  const card = $('#upBillCard');
+  if (!mine.length) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+
+  const PILL = { paid: 'pill-paid', soon: 'pill-soon', late: 'pill-late', idle: 'pill-idle', open: 'pill-idle' };
+  const states = mine.map(b => billStatus(b, txns, mk));
+  const due = mine.reduce((s, b, i) => s + (states[i].state === 'paid' ? 0 : b.amt), 0);
+  const total = mine.reduce((s, b) => s + b.amt, 0);
+
+  $('#upBills').innerHTML = `
+    ${mine.map((b, i) => {
+      const st = states[i];
+      return `<div class="bill-row" role="button" tabindex="0" data-bill="${b.id}">
+        <span>
+          <span class="bill-name">${escapeHtml(b.name)}</span>
+          <span class="bill-when">${b.day ? 'Due the ' + ordinal(b.day) : 'Monthly'}</span>
+        </span>
+        <span class="bill-right">
+          <span class="bill-amt">${money(b.amt)}</span>
+          <span class="pill ${PILL[st.state]}">${dueLabel(st)}</span>
+        </span>
+      </div>`;
+    }).join('')}
+    <div class="preview-total"><span>${mine.length} bill${mine.length === 1 ? '' : 's'} a month</span><span>${money(total)}</span></div>
+    ${due ? `<div class="preview-total"><span>Still to pay</span><span>${money(due)}</span></div>` : ''}`;
 }
 
 /**
@@ -1713,6 +1752,10 @@ function openBillSheet(billId) {
       <label class="field"><span>Paid by</span><select id="bPayer">
         <option value="a"${b && b.payer === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)}</option>
         <option value="b"${b && b.payer === 'b' ? ' selected' : ''}>${escapeHtml(S.cfg.nameB)}</option></select></label>
+      <label class="field"><span>Belongs to</span><select id="bProp">
+        <option value=""${!(b && (b.prop === 'uptown' || (b.prop !== 'no' && UPTOWN_AUTO.test(b.name)))) ? ' selected' : ''}>Household</option>
+        <option value="uptown"${b && (b.prop === 'uptown' || (b.prop !== 'no' && UPTOWN_AUTO.test(b.name))) ? ' selected' : ''}>🏘️ Uptown flat</option>
+      </select></label>
     </div>
     ${b && st.state !== 'paid' ? '<button id="bPay" class="btn btn-primary">Mark paid for ' + escapeHtml(monthName(S.month)) + '</button><div style="height:10px"></div>' : ''}
     ${b && st.state === 'paid' ? '<button id="bUnpay" class="btn btn-secondary">Undo this month\'s payment</button><div style="height:10px"></div>' : ''}
@@ -1740,6 +1783,7 @@ function openBillSheet(billId) {
       cc: ccVal > 0 ? Math.min(Math.round(ccVal * unit), Math.round(amt * unit)) : 0,
       grp: $('#bGrp').value.trim() || null,
       cat: $('#bCat').value, payer: $('#bPayer').value,
+      prop: $('#bProp').value === 'uptown' ? 'uptown' : 'no',
     };
     if (b) appendEvent({ k: 'bedit', x: b.id, p: payload });
     else   appendEvent({ k: 'badd', x: { id: uid(), seq: bills.reduce((m, x) => Math.max(m, x.seq ?? 0), 0) + 1, ...payload } });
@@ -2237,7 +2281,8 @@ function wireEvents() {
     S.upMonth = shiftMonth(S.upMonth || monthKey(todayISO()), 1); renderUptown();
   });
   $('#v-uptown').addEventListener('click', e => {
-    const b = e.target.closest('[data-txn]'); if (b) openSheet(b.dataset.txn);
+    const t = e.target.closest('[data-txn]'); if (t) { openSheet(t.dataset.txn); return; }
+    const b = e.target.closest('[data-bill]'); if (b) openBillSheet(b.dataset.bill);
   });
 
   // bills
