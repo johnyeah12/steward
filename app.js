@@ -1784,8 +1784,22 @@ async function boot() {
     $('#setup').classList.remove('hidden');
   }
 
-  // ?nosw disables the offline cache — only used while developing.
-  if ('serviceWorker' in navigator && !location.search.includes('nosw')) {
+  // On localhost the offline cache is pure friction: it serves a stale shell so
+  // edits look like they did nothing. Tear any worker down and never register
+  // one here — the cache is a production feature and is tested on the real URL.
+  const isDev = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  if (isDev && 'serviceWorker' in navigator) {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+      if (regs.length) location.reload();
+    } catch { /* nothing cached to clear */ }
+  }
+
+  // ?nosw also disables it, for testing the real URL without the cache.
+  if (!isDev && 'serviceWorker' in navigator && !location.search.includes('nosw')) {
     try {
       // If a worker was already in charge, a new one taking over means a new
       // build landed — reload once so the phone shows it straight away instead
@@ -2009,3 +2023,4 @@ async function finishSetup() {
 }
 
 boot();
+
