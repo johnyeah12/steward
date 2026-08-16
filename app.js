@@ -766,7 +766,7 @@ function render() {
 }
 
 function renderHome() {
-  const { txns } = reduceLog();
+  const { txns, bills } = reduceLog();
   const mt = spendIn(txns, S.month);          // income is not spending
   const total = mt.reduce((s, t) => s + t.amt, 0);
 
@@ -799,6 +799,7 @@ function renderHome() {
   } else bc.classList.add('hidden');
 
   renderCatChart(mt, total);
+  renderAssessment(txns, bills);
 
   // who paid
   const paid = { a: 0, b: 0 };
@@ -813,6 +814,91 @@ function renderHome() {
       </div>
       <div class="cat-amt">${money(paid[w])}</div>
     </div>`).join('') : `<div class="empty">Nothing logged yet</div>`;
+}
+
+/* ── the honest read on the cards ──
+ *
+ * Home answers "what did we spend this month". This answers the harder
+ * question: what do the cards cost us in a normal month, and how does that
+ * sit against what the bills actually set aside for card spending.
+ *
+ * Only charges that came off a statement count — an entry typed by hand is
+ * usually cash or a transfer, and mixing the two makes the comparison
+ * meaningless. The current month is excluded outright: a month that is three
+ * days old always flatters, and a soft number here is worse than none.
+ */
+function renderAssessment(txns, bills) {
+  const el = $('#assessCard');
+  const card = txns.filter(t => t.sk && isSpend(t));
+  const thisMonth = monthKey(todayISO());
+
+  // A statement's first month usually carries a handful of stray charges that
+  // fell either side of the cycle. Averaging those in halves the figure, so a
+  // month only counts if it holds a normal number of charges — measured
+  // against the median, which no single thin or fat month can shift.
+  const count = new Map();
+  for (const t of card) count.set(monthKey(t.date), (count.get(monthKey(t.date)) || 0) + 1);
+  const counts = [...count.values()].sort((a, b) => a - b);
+  const median = counts.length ? counts[Math.floor(counts.length / 2)] : 0;
+  const months = [...count.keys()]
+    .filter(m => m !== thisMonth && count.get(m) >= median * 0.4)
+    .sort();
+
+  // Two months is the least that can show a trend; below that, say nothing.
+  if (months.length < 2) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+
+  const rows = card.filter(t => months.includes(monthKey(t.date)));
+  const perMonth = rows.reduce((s, t) => s + t.amt, 0) / months.length;
+
+  const names = months.map(m => monthName(m).replace(/ \d{4}$/, ''));
+  const listed = names.length > 1
+    ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1]
+    : names[0];
+  $('#assessAvg').textContent = money(Math.round(perMonth));
+  $('#assessSub').textContent = `Averaged over ${listed} · ${rows.length} charges`;
+
+  // What the bills plan for card spending — the "if charged via CC" column.
+  const planned = (bills || []).reduce((s, b) => s + (Number(b.cc) || 0), 0);
+  const gap = $('#assessGap');
+  if (planned > 0) {
+    const over = perMonth - planned;
+    gap.className = 'assess-gap ' + (over > 0 ? 'over' : 'under');
+    gap.innerHTML = over > 0
+      ? `<b>${money(Math.round(over))}</b> a month beyond the ${money(planned)} the bills set
+         aside for cards — ${(perMonth / planned).toFixed(1)}× the plan, or
+         <b>${money(Math.round(over * 12))}</b> over a year.`
+      : `<b>${money(Math.round(-over))}</b> a month under the ${money(planned)} set aside for cards.`;
+  } else {
+    gap.className = 'assess-gap';
+    gap.textContent = 'Set the "on card" column on your bills to compare this against a plan.';
+  }
+
+  // Where it goes, averaged — the four biggest are where any real cut lives.
+  const by = new Map();
+  for (const t of rows) by.set(t.cat, (by.get(t.cat) || 0) + t.amt);
+  const top = [...by.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const mx = top.length ? top[0][1] : 1;
+  $('#assessRows').innerHTML = top.map(([k, v]) => {
+    const c = catOf(k);
+    return `<div class="assess-row">
+      <div class="assess-name">${c.e} ${c.n}</div>
+      <div class="assess-bar"><div class="assess-fill" style="width:${Math.max(4, (v / mx) * 100)}%"></div></div>
+      <div class="assess-amt">${moneyShort(Math.round(v / months.length))}</div>
+    </div>`;
+  }).join('');
+
+  // One ratio worth watching: what you pay someone else to feed you, against
+  // what it costs to feed yourselves.
+  const sumOf = names => rows
+    .filter(t => names.includes(catOf(t.cat).n))
+    .reduce((s, t) => s + t.amt, 0) / months.length;
+  const out = sumOf(['Eating out', 'Food delivery']);
+  const groc = sumOf(['Groceries']);
+  $('#assessRatio').textContent = groc > 0
+    ? `Eating out and delivery run ${(out / groc).toFixed(1)}× your groceries `
+      + `— ${money(Math.round(out))} against ${money(Math.round(groc))} a month.`
+    : '';
 }
 
 function renderHistory() {

@@ -122,6 +122,18 @@
         <figcaption id="catCaption" class="chart-cap"></figcaption>
       </div>
 
+      <!-- The trend, not the month: what the cards actually cost, against
+           what the bills set aside for them. Hidden until two complete
+           months exist, because one month is not a trend. -->
+      <div id="assessCard" class="card hidden">
+        <div class="card-head">What the cards actually cost</div>
+        <div class="assess-hero"><span id="assessAvg">—</span><small>/month</small></div>
+        <div id="assessSub" class="assess-sub"></div>
+        <div id="assessGap" class="assess-gap"></div>
+        <div id="assessRows" class="assess-rows"></div>
+        <div id="assessRatio" class="assess-ratio"></div>
+      </div>
+
       <div class="card">
         <div class="card-head">Who paid</div>
         <div id="whoPaid" class="cats"></div>

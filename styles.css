@@ -483,6 +483,39 @@ button { background: none; border: 0; cursor: pointer; }
 
 .empty { text-align: center; color: var(--txt-3); font-size: 15px; padding: 22px 0; }
 
+/* ─────────── Assessment ───────────
+   Deliberately quieter than the hero: this is the number you live with, not
+   the one you just spent. The gap line is the only thing allowed to shout. */
+.assess-hero {
+  font-size: 34px; font-weight: 700; letter-spacing: -1px;
+  font-variant-numeric: tabular-nums; line-height: 1.1;
+}
+.assess-hero small { font-size: 15px; font-weight: 500; color: var(--txt-2); letter-spacing: 0; }
+.assess-sub { font-size: 13.5px; color: var(--txt-2); margin-top: 4px; }
+.assess-gap {
+  font-size: 14.5px; line-height: 1.5; color: var(--txt-2);
+  margin-top: 14px; padding: 12px 14px; border-radius: 12px;
+  background: var(--tint-soft); border-left: 3px solid var(--tint);
+}
+.assess-gap b { color: var(--txt); font-weight: 700; }
+.assess-gap.over  { border-left-color: var(--red); }
+.assess-gap.under { border-left-color: var(--green); }
+.assess-rows { display: flex; flex-direction: column; gap: 11px; margin-top: 16px; }
+.assess-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px auto; gap: 11px; align-items: center; }
+.assess-name {
+  font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.assess-bar { height: 6px; border-radius: 99px; background: var(--tint-soft); overflow: hidden; }
+.assess-fill { height: 100%; border-radius: 99px; background: var(--tint); }
+.assess-amt {
+  font-size: 14.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.assess-ratio {
+  font-size: 13.5px; color: var(--txt-2); line-height: 1.5;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--sep);
+}
+.assess-ratio:empty { display: none; }
+
 /* ─────────── Add ─────────── */
 .amount-wrap { text-align: center; padding: 6px 0 16px; }
 .amount {
