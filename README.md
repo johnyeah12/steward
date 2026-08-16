@@ -207,6 +207,29 @@ Nothing imports without a preview, and every charge carries a fingerprint of its
 date, description and amount. Re-importing an overlapping statement recognises
 what it has already seen and imports only what's new.
 
+## Uptown
+
+The Uptown flat is tracked apart from household spending, because it is a small
+business rather than a cost: earnings, its own expenses, the monthly net and a
+year-to-date table.
+
+**Import Airbnb export** takes the CSV from Airbnb → Account → Transaction
+History → Export, read on the phone like everything else. Two details matter:
+
+- The export mixes **Reservation** rows (what a booking earned) with **Payout**
+  rows (that same money reaching your bank). Importing both would double every
+  peso, so payouts are recognised and reported as skipped rather than silently
+  dropped.
+- Airbnb writes dates as **MM/DD/YYYY** wherever you live, so the reader is told
+  that explicitly. Left to guess, `06/05` becomes 6 May instead of 5 June.
+
+Each booking is keyed by its **confirmation code**, so re-importing an
+overlapping export imports nothing twice. If the export's currency differs from
+yours, the preview says so and offers a rate — rows stay in the source currency
+and the total shows both, so nothing is silently mislabelled.
+
+Income is a distinct kind of entry and never counts towards household spending.
+
 ## How sync works
 
 The ledger is an append-only event log. Each phone appends immutable, uniquely-IDed

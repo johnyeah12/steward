@@ -462,5 +462,108 @@ const Statement = (() => {
     return { rows: parseCsv(await file.text()), kind: 'CSV' };
   }
 
-  return { read, extract, parseCsv, parseXlsx, parsePdf, toISODate, toMoney };
+  /* ─────────────── Airbnb payout export ─────────────── */
+
+  const AB = {
+    date:    /^date$/i,
+    type:    /^type$/i,
+    code:    /^confirmation\s*code$/i,
+    start:   /^start\s*date$/i,
+    nights:  /^nights$/i,
+    guest:   /^guest$/i,
+    listing: /^listing$/i,
+    details: /^details$/i,
+    currency:/^currency$/i,
+    amount:  /^amount$/i,
+    paidout: /^paid\s*out$/i,
+    hostfee: /^host\s*fee$/i,
+    cleaning:/^cleaning\s*fee$/i,
+    gross:   /^gross\s*earnings$/i,
+  };
+
+  /** Does this look like an Airbnb transaction export rather than a statement? */
+  function looksLikeAirbnb(rows) {
+    return rows.slice(0, 8).some(r => {
+      const cells = r.map(c => String(c).trim());
+      return cells.some(c => AB.code.test(c)) &&
+             cells.some(c => AB.type.test(c) || AB.gross.test(c) || AB.paidout.test(c));
+    });
+  }
+
+  /**
+   * Read an Airbnb export into earnings.
+   *
+   * The file mixes two views of the same money: a "Reservation" row per booking
+   * and a "Payout" row per bank transfer. Importing both would double every
+   * peso, so payouts are recognised and skipped — the reservations are what
+   * actually earned, and they carry the guest, dates and nights with them.
+   */
+  function parseAirbnb(rows) {
+    let idx = null, headerAt = -1;
+    for (let i = 0; i < Math.min(rows.length, 8); i++) {
+      const cells = rows[i].map(c => String(c).trim());
+      if (!cells.some(c => AB.code.test(c))) continue;
+      idx = {};
+      cells.forEach((c, n) => {
+        for (const [key, re] of Object.entries(AB)) if (re.test(c)) idx[key] = n;
+      });
+      headerAt = i;
+      break;
+    }
+    if (!idx) return [];
+
+    const cell = (r, k) => (idx[k] != null ? String(r[idx[k]] ?? '').trim() : '');
+    const num = s => { const m = toMoney(s); return m ? (/-|\(/.test(String(s)) ? -m.value : m.value) : null; };
+    const out = [];
+
+    // Airbnb exports dates as MM/DD/YYYY regardless of where you live, so the
+    // day-first default would silently turn 06/05 into 6 May instead of 5 June.
+    const ORDER = 'mdy';
+    const year = new Date().getFullYear();
+
+    for (const r of rows.slice(headerAt + 1)) {
+      if (!r.some(c => String(c).trim())) continue;
+      const type = cell(r, 'type');
+      const code = cell(r, 'code');
+
+      // a bank transfer, not a booking — the same money seen twice
+      const isPayout = /payout/i.test(type) && !/resolution/i.test(type);
+
+      const amount = num(cell(r, 'amount'));
+      const gross  = num(cell(r, 'gross'));
+      const paid   = num(cell(r, 'paidout'));
+      // payout rows carry their figure in Paid Out; keep them so they can be
+      // reported as skipped rather than vanishing without explanation
+      const value  = amount != null ? amount : (gross != null ? gross : (isPayout ? paid : null));
+      if (value == null || value === 0) continue;
+
+      const date = toISODate(cell(r, 'start'), year, ORDER)
+                || toISODate(cell(r, 'date'), year, ORDER);
+      if (!date) continue;
+
+      const guest = cell(r, 'guest');
+      const nights = cell(r, 'nights');
+      const listing = cell(r, 'listing');
+      const label = guest
+        ? `${guest}${nights ? ` · ${nights} night${nights === '1' ? '' : 's'}` : ''}`
+        : (cell(r, 'details') || listing || type || 'Airbnb');
+
+      out.push({
+        date, code, type: type || 'Reservation',
+        amount: Math.abs(value),
+        refund: value < 0,
+        skip: isPayout,
+        skipWhy: isPayout ? 'payout to bank' : null,
+        note: label,
+        listing,
+        currency: cell(r, 'currency') || null,
+        cleaning: num(cell(r, 'cleaning')),
+        hostFee: num(cell(r, 'hostfee')),
+      });
+    }
+    return out;
+  }
+
+  return { read, extract, parseCsv, parseXlsx, parsePdf, toISODate, toMoney,
+           parseAirbnb, looksLikeAirbnb };
 })();

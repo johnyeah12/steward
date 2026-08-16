@@ -885,6 +885,129 @@ function renderUptown() {
     </div>`;
 }
 
+/* ── importing an Airbnb export ── */
+
+function openAirbnbSheet() {
+  $('#sheetBody').innerHTML = `
+    <h3 class="sheet-title">Import from Airbnb</h3>
+    <p class="sheet-sub">The transaction export from Airbnb → Account → Transaction History → Export CSV. Read on this phone; nothing is uploaded.</p>
+    <button id="abnbPick" class="btn btn-primary">Choose the export file</button>
+    <div id="abnbOut"></div>
+    <div style="height:10px"></div>
+    <button id="abnbClose" class="btn btn-secondary">Cancel</button>`;
+  $('#sheet').classList.remove('hidden');
+  $('#abnbClose').onclick = closeSheet;
+  $('#abnbPick').onclick = () => $('#abnbInput').click();
+}
+
+async function onAirbnbFile(file) {
+  if (!file) return;
+  const out = $('#abnbOut');
+  out.innerHTML = '<div style="height:16px"></div><div class="card"><div class="scan-spinner"></div></div>';
+
+  let rows;
+  try {
+    ({ rows } = await Statement.read(file, () => {}));
+  } catch (e) {
+    out.innerHTML = `<div style="height:16px"></div><p class="card-note bad-note">${escapeHtml(e.message || 'Could not read that file')}</p>`;
+    $('#abnbInput').value = '';
+    return;
+  }
+
+  if (!Statement.looksLikeAirbnb(rows)) {
+    out.innerHTML = `<div style="height:16px"></div><p class="card-note bad-note">
+      That doesn't look like an Airbnb export — no confirmation-code column.
+      Use Airbnb → Account → Transaction History → Export CSV.</p>`;
+    $('#abnbInput').value = '';
+    return;
+  }
+
+  const found = Statement.parseAirbnb(rows);
+  const { txns } = reduceLog();
+  const seen = new Set(txns.filter(t => t.abnb).map(t => t.abnb));
+  for (const r of found) {
+    r.dup = !!(r.code && seen.has(r.code));
+    r.use = !r.skip && !r.dup && !r.refund;
+  }
+
+  const usable = found.filter(r => r.use);
+  const payouts = found.filter(r => r.skip).length;
+  const dupes = found.filter(r => r.dup).length;
+  const refunds = found.filter(r => r.refund && !r.dup).length;
+  const cur = found.find(r => r.currency)?.currency || null;
+  const mismatch = cur && cur.toUpperCase() !== String(S.cfg.cur).toUpperCase();
+  const gross = usable.reduce((s, r) => s + r.amount, 0);
+
+  if (!usable.length) {
+    out.innerHTML = `<div style="height:16px"></div><p class="card-note">
+      Nothing new to import${dupes ? ` — ${dupes} already in` : ''}${payouts ? `, ${payouts} payout rows skipped` : ''}.</p>`;
+    $('#abnbInput').value = '';
+    return;
+  }
+
+  out.innerHTML = `
+    <div style="height:16px"></div>
+    ${mismatch ? `<div class="card warn-card">
+      <div class="card-head">Different currency</div>
+      <p class="card-note">This export is in <b>${escapeHtml(cur)}</b> but Steward is set to <b>${escapeHtml(S.cfg.cur)}</b>.
+      Set a rate to convert, or leave it at 1 to import the numbers unchanged.</p>
+      <label class="field"><span>1 ${escapeHtml(cur)} =</span><input id="abnbRate" type="number" inputmode="decimal" step="any" value="1"> </label>
+    </div>` : ''}
+    <div class="card">
+      <div class="card-head">${usable.length} booking${usable.length === 1 ? '' : 's'} to import</div>
+      <div class="preview-wrap">
+        <table class="preview-table">
+          <thead><tr><th>Date</th><th>Guest</th><th>Earned</th></tr></thead>
+          <tbody>${found.map(r => `
+            <tr class="${r.use ? '' : 'row-muted'}">
+              <td>${r.date.slice(5).replace('-', '/')}</td>
+              <td>${escapeHtml(r.note.slice(0, 30))}${
+                    r.dup ? '<br><span class="prev-grp">already imported</span>'
+                  : r.skip ? '<br><span class="prev-grp">' + escapeHtml(r.skipWhy) + '</span>'
+                  : r.refund ? '<br><span class="prev-grp">refund / adjustment</span>' : ''}</td>
+              <td>${mismatch
+                    ? escapeHtml(cur) + ' ' + r.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                    : money(Math.round(r.amount * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)))}</td>
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>
+      ${mismatch ? `<div class="preview-total"><span>Total in ${escapeHtml(cur)}</span><span>${cur} ${gross.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ''}
+      <div class="preview-total"><span>${mismatch ? `Converted to ${escapeHtml(S.cfg.cur)}` : 'Total earnings'}</span><span id="abnbTotal">${money(Math.round(gross * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)))}</span></div>
+    </div>
+    ${payouts || dupes || refunds ? `<p class="card-note">${[
+      payouts ? `${payouts} payout rows skipped — they are the same money reaching your bank` : '',
+      dupes ? `${dupes} already imported` : '',
+      refunds ? `${refunds} refunds or adjustments left out` : ''].filter(Boolean).join(' · ')}.</p>` : ''}
+    <button id="abnbGo" class="btn btn-primary">Import ${usable.length} booking${usable.length === 1 ? '' : 's'}</button>`;
+
+  $('#abnbInput').value = '';
+
+  const rate = () => (mismatch ? (parseFloat($('#abnbRate').value) || 1) : 1);
+  if (mismatch) {
+    $('#abnbRate').addEventListener('input', () => {
+      $('#abnbTotal').textContent = money(Math.round(gross * rate() * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)));
+    });
+  }
+
+  $('#abnbGo').onclick = () => {
+    const unit = ZERO_DP.has(S.cfg.cur) ? 1 : 100;
+    const r8 = rate();
+    for (const r of usable) {
+      appendEvent({
+        k: 'add',
+        x: {
+          id: uid(), amt: Math.round(r.amount * r8 * unit), cat: 'misc',
+          note: r.note.slice(0, 60), date: r.date, payer: iAm(),
+          prop: 'uptown', kind: 'in', abnb: r.code || undefined,
+        },
+      });
+    }
+    closeSheet();
+    toast(`${usable.length} booking${usable.length === 1 ? '' : 's'} imported`);
+    haptic(); render(); sync();
+  };
+}
+
 /** Log an Uptown earning or cost. */
 function openUptownSheet(kind) {
   const income = kind === 'in';
@@ -1905,6 +2028,8 @@ function wireEvents() {
 
 
   // uptown
+  $('#upImport').addEventListener('click', openAirbnbSheet);
+  $('#abnbInput').addEventListener('change', e => onAirbnbFile(e.target.files && e.target.files[0]));
   $('#upAddIn').addEventListener('click', () => openUptownSheet('in'));
   $('#upAddOut').addEventListener('click', () => openUptownSheet('out'));
   $('#upPrev').addEventListener('click', () => {
