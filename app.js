@@ -574,6 +574,15 @@ function parseBillRow(cells, idx, group) {
     return { name, amount, day, cc, grp: group || null, ok: issues.length === 0, issues };
 }
 
+/**
+ * One-off money spent getting the flat ready — interior design, furniture,
+ * appliances. Capital rather than a running cost, so it is kept out of the
+ * monthly net: a single furniture order would otherwise make that month look
+ * like a disaster and every other month look better than it was. It is shown
+ * separately, against how much the flat has earned back.
+ */
+const isSetup = t => t.setup === 1;
+
 /** Money coming in — Airbnb payouts and the like. Never counted as spending. */
 const isIncome = t => t.kind === 'in';
 const isSpend  = t => !isIncome(t);
@@ -914,7 +923,8 @@ function renderCatDetail(k, txns) {
 function renderUptown() {
   const { txns } = reduceLog();
   const mk = S.upMonth || monthKey(todayISO());
-  const mine = txns.filter(isUptown);
+  const all = txns.filter(isUptown);
+  const mine = all.filter(t => !isSetup(t));          // setup costs are shown apart
   const month = mine.filter(t => monthKey(t.date) === mk);
   const earned = month.filter(isIncome).reduce((s, t) => s + t.amt, 0);
   const spent  = month.filter(isSpend).reduce((s, t) => s + t.amt, 0);
@@ -951,6 +961,7 @@ function renderUptown() {
     : `<div class="empty">${empty}</div>`;
 
   renderUptownBills(mk, txns);
+  renderUptownSetup(all, mine);
   renderUptownFees(month);
   $('#upIn').innerHTML  = list(month.filter(isIncome), 'No earnings logged for this month');
   $('#upOut').innerHTML = list(month.filter(isSpend),  'No costs logged for this month');
@@ -1233,6 +1244,153 @@ function renderUptownBills(mk, txns) {
     }).join('')}
     <div class="preview-total"><span>${mine.length} bill${mine.length === 1 ? '' : 's'} a month</span><span>${dual ? moneyProp(totalP) + ' · ' + money(total) : money(total)}</span></div>
     ${due ? `<div class="preview-total"><span>Still to pay</span><span>${dual ? moneyProp(dueP) + ' · ' + money(due) : money(due)}</span></div>` : ''}`;
+}
+
+const SETUP_KINDS = ['Interior design', 'Furniture', 'Appliances', 'Renovation',
+                     'Linen & kitchen', 'Fees & permits', 'Other setup'];
+
+/**
+ * What it cost to get the flat ready, and how much of that it has earned back.
+ *
+ * Payback is measured against everything the flat has actually netted since it
+ * started — earnings less its running costs — not against earnings alone,
+ * which would flatter it.
+ */
+function renderUptownSetup(all, running) {
+  const box = $('#upSetup');
+  const setup = all.filter(isSetup);
+
+  if (!setup.length) {
+    box.innerHTML = `<p class="card-note" style="margin:0">
+      Nothing recorded yet. Add what it cost to get the flat ready —
+      interior design, furniture, appliances — and these stay out of the monthly
+      figures above, so one big purchase doesn't distort a month. You'll see how
+      much of it the flat has earned back.</p>`;
+    return;
+  }
+
+  const spent = setup.reduce((s, t) => s + inProp(t), 0);
+  const netSoFar = running.reduce((s, t) => s + (isIncome(t) ? inProp(t) : -inProp(t)), 0);
+  const recovered = Math.max(0, Math.min(netSoFar, spent));
+  const pct = spent ? (recovered / spent) * 100 : 0;
+
+  // group by what it was for, biggest first
+  const byKind = new Map();
+  for (const t of setup) {
+    const k = t.note || 'Other setup';
+    byKind.set(k, (byKind.get(k) || 0) + inProp(t));
+  }
+  const rows = [...byKind.entries()].sort((a, b) => b[1] - a[1]);
+
+  box.innerHTML = `
+    ${rows.map(([k, v]) => `
+      <div class="ytd-row">
+        <span class="ytd-month">${escapeHtml(k)}</span>
+        <span class="ytd-net">${moneyProp(v)}</span>
+      </div>`).join('')}
+    <div class="ytd-row ytd-total"><span>Put in so far</span><span class="ytd-net">${moneyProp(spent)}</span></div>
+    <div class="bar" style="margin-top:14px"><div class="bar-fill" style="width:${Math.max(2, pct)}%"></div></div>
+    <p class="card-note" style="margin:10px 0 0">
+      ${netSoFar <= 0
+        ? `The flat hasn't netted anything back yet — it is ${moneyProp(spent)} down so far.`
+        : `Earned back <b>${moneyProp(recovered)}</b> of ${moneyProp(spent)} — <b>${pct.toFixed(0)}%</b>${
+            pct >= 100 ? '. It has paid for itself.' : `, ${moneyProp(spent - recovered)} to go.`}`}
+      Counted against what the flat nets after its running costs, not against earnings alone.
+    </p>`;
+}
+
+/** Record a one-off cost of setting the flat up. */
+function openSetupSheet() {
+  const pc = propCur();
+  const dual = pc !== S.cfg.cur;
+  $('#sheetBody').innerHTML = `
+    <h3 class="sheet-title">Setting up the flat</h3>
+    <p class="sheet-sub">A one-off cost of getting it ready. Kept out of the monthly figures so a single purchase doesn't distort a month.</p>
+    <div class="chips" id="setupKinds">
+      ${SETUP_KINDS.map((k, i) => `<button class="chip${i === 0 ? ' on' : ''}" data-kind="${escapeHtml(k)}">${escapeHtml(k)}</button>`).join('')}
+    </div>
+    <div class="card">
+      ${dual ? `<div class="card-head">Currency</div>
+      <div class="seg" id="suCurSeg">
+        <button data-v="${escapeHtml(pc)}" class="on">${escapeHtml(pc)}</button>
+        <button data-v="${escapeHtml(S.cfg.cur)}">${escapeHtml(S.cfg.cur)}</button>
+      </div><div style="height:14px"></div>` : ''}
+      <label class="field"><span>Amount (<span id="suCurLbl">${escapeHtml(dual ? pc : S.cfg.cur)}</span>)</span><input id="suAmt" type="number" inputmode="decimal" step="any" placeholder="0"></label>
+      ${dual ? `<label class="field"><span>1 ${escapeHtml(pc)} = ${escapeHtml(S.cfg.cur)}</span><input id="suRate" type="number" inputmode="decimal" step="any" value="${propRate()}"></label>
+      <div class="field"><span>Works out to</span><span id="suConv" class="conv-out">—</span></div>
+      <p id="suRateNote" class="card-note" style="margin:10px 0 0"></p>` : ''}
+      <label class="field"><span>Detail</span><input id="suNote" type="text" placeholder="Optional — e.g. sofa and bed" autocapitalize="sentences"></label>
+      <label class="field"><span>Date</span><input id="suDate" type="date" value="${todayISO()}"></label>
+    </div>
+    <button id="suSave" class="btn btn-primary">Save</button>
+    <div style="height:10px"></div>
+    <button id="suClose" class="btn btn-secondary">Cancel</button>`;
+
+  $('#sheet').classList.remove('hidden');
+  $('#suClose').onclick = closeSheet;
+  setTimeout(() => $('#suAmt').focus(), 150);
+
+  let kind = SETUP_KINDS[0];
+  $('#setupKinds').addEventListener('click', e => {
+    const b = e.target.closest('[data-kind]'); if (!b) return;
+    kind = b.dataset.kind;
+    $$('#setupKinds .chip').forEach(c => c.classList.toggle('on', c === b));
+  });
+
+  let entered = dual ? pc : S.cfg.cur;
+  const paint = () => {
+    if (!dual) return;
+    const v = parseFloat($('#suAmt').value);
+    const r = parseFloat($('#suRate').value) || propRate();
+    $('#suRate').closest('.field').classList.toggle('hidden', entered !== pc);
+    if (!v || v <= 0) { $('#suConv').textContent = '—'; return; }
+    $('#suConv').textContent = entered === pc
+      ? money(Math.round(v * r * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)))
+      : moneyProp(Math.round((v / r) * (ZERO_DP.has(pc) ? 1 : 100)));
+  };
+  if (dual) {
+    $('#suCurSeg').addEventListener('click', e => {
+      const b = e.target.closest('button[data-v]'); if (!b) return;
+      entered = b.dataset.v;
+      [...$('#suCurSeg').children].forEach(x => x.classList.toggle('on', x === b));
+      $('#suCurLbl').textContent = entered;
+      paint();
+    });
+    $('#suAmt').addEventListener('input', paint);
+    $('#suRate').addEventListener('input', paint);
+    paint();
+    attachLiveRate($('#suRate'), $('#suRateNote'), pc, S.cfg.cur, paint);
+  }
+
+  $('#suSave').onclick = () => {
+    const v = parseFloat($('#suAmt').value);
+    if (!v || v <= 0) { toast('Enter an amount'); return; }
+    const appUnit = ZERO_DP.has(S.cfg.cur) ? 1 : 100;
+    const r = dual ? (parseFloat($('#suRate').value) || propRate()) : 1;
+    const detail = $('#suNote').value.trim();
+
+    let amt, src = null;
+    if (dual && entered === pc) {
+      amt = Math.round(v * r * appUnit);
+      src = { cur: pc, amt: Math.round(v * (ZERO_DP.has(pc) ? 1 : 100)) };
+    } else {
+      amt = Math.round(v * appUnit);
+    }
+
+    appendEvent({
+      k: 'add',
+      x: {
+        id: uid(), amt, cat: 'home',
+        note: detail ? `${kind} — ${detail}` : kind,
+        date: $('#suDate').value || todayISO(),
+        payer: iAm(), prop: 'uptown', setup: 1,
+        ...(src ? { src, rate: r } : {}),
+      },
+    });
+    closeSheet();
+    toast(`${kind} logged`);
+    haptic(); render(); sync();
+  };
 }
 
 /**
@@ -2442,6 +2600,7 @@ function wireEvents() {
   // uptown
   $('#upImport').addEventListener('click', openAirbnbSheet);
   $('#abnbInput').addEventListener('change', e => onAirbnbFile(e.target.files && e.target.files[0]));
+  $('#upAddSetup').addEventListener('click', openSetupSheet);
   $('#upAddIn').addEventListener('click', () => openUptownSheet('in'));
   $('#upAddOut').addEventListener('click', () => openUptownSheet('out'));
   $('#upPrev').addEventListener('click', () => {
