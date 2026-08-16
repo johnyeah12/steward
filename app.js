@@ -903,6 +903,7 @@ function renderUptown() {
         </div>`).join('')
     : `<div class="empty">${empty}</div>`;
 
+  renderUptownFees(month);
   $('#upIn').innerHTML  = list(month.filter(isIncome), 'No earnings logged for this month');
   $('#upOut').innerHTML = list(month.filter(isSpend),  'No costs logged for this month');
 
@@ -1066,6 +1067,16 @@ async function onAirbnbFile(file) {
           prop: 'uptown', kind: 'in', abnb: r.code || undefined,
           // keep what was actually earned, so a wrong rate is fixable later
           ...(mismatch ? { src: { cur, amt: Math.round(r.amount * (ZERO_DP.has(cur) ? 1 : 100)) }, rate: r8 } : {}),
+          // the booking's own breakdown, in the export's currency. These are
+          // for reporting only — the service fee is already out of `amt`.
+          ...(r.gross || r.fee || r.cleaning ? {
+            bd: {
+              cur: cur || S.cfg.cur,
+              gross: Math.round((r.gross || 0) * 100),
+              fee:   Math.round((r.fee || 0) * 100),
+              clean: Math.round((r.cleaning || 0) * 100),
+            },
+          } : {}),
         },
       });
     }
@@ -1073,6 +1084,42 @@ async function onAirbnbFile(file) {
     toast(`${usable.length} booking${usable.length === 1 ? '' : 's'} imported`);
     haptic(); render(); sync();
   };
+}
+
+/**
+ * What a month's bookings were worth before Airbnb took its cut.
+ *
+ * Gross is what guests paid, cleaning fee included; Airbnb's service fee comes
+ * out of that and the remainder is what lands. The fee is NOT logged as an
+ * expense — it never reached the account, and recording it as one would count
+ * it twice. Cleaning is shown because it is revenue meant to cover a real cost.
+ */
+function renderUptownFees(month) {
+  const card = $('#upFeeCard');
+  const rows = month.filter(t => isIncome(t) && t.bd);
+  if (!rows.length) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+
+  const cur = rows[0].bd.cur;
+  const gross = rows.reduce((s, t) => s + (t.bd.gross || 0), 0);
+  const fee   = rows.reduce((s, t) => s + (t.bd.fee || 0), 0);
+  const clean = rows.reduce((s, t) => s + (t.bd.clean || 0), 0);
+  // what actually landed, taken from the entries themselves rather than
+  // recomputed — Airbnb's own figures do not always subtract exactly
+  const got = rows.reduce((s, t) => s + inProp(t), 0);
+  const adj = got - (gross - fee);
+  const pct = gross ? (fee / gross) * 100 : 0;
+
+  $('#upFees').innerHTML = `
+    <div class="ytd-row"><span class="ytd-month">Guests paid</span><span class="ytd-net">${moneyIn(gross, cur)}</span></div>
+    <div class="ytd-row"><span class="ytd-month">Airbnb service fee</span><span class="ytd-out">−${moneyIn(fee, cur)}</span></div>
+    ${Math.abs(adj) >= 100 ? `<div class="ytd-row"><span class="ytd-month">Airbnb adjustments</span><span class="ytd-net">${adj > 0 ? '+' : '−'}${moneyIn(Math.abs(adj), cur)}</span></div>` : ''}
+    <div class="ytd-row ytd-total"><span>You received</span><span class="ytd-net pos">${moneyIn(got, cur)}</span></div>
+    <p class="card-note" style="margin:12px 0 0">
+      Airbnb kept <b>${pct.toFixed(1)}%</b>${clean ? ` · ${moneyIn(clean, cur)} of what guests paid was the cleaning fee, which is yours to cover the cleaner` : ''}.
+      The service fee never reached your account, so it is not logged as an expense —
+      the earnings below are already net of it.
+    </p>`;
 }
 
 /** Log an Uptown earning or cost. */

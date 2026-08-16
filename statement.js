@@ -476,9 +476,13 @@ const Statement = (() => {
     currency:/^currency$/i,
     amount:  /^amount$/i,
     paidout: /^paid\s*out$/i,
-    hostfee: /^host\s*fee$/i,
+    // Airbnb's commission is "Host Fee" in some exports and "Service fee" in
+    // others — the same deduction under two names
+    hostfee: /^(host|service)\s*fee$/i,
+    fastpay: /^fast\s*pay\s*fee$/i,
     cleaning:/^cleaning\s*fee$/i,
     gross:   /^gross\s*earnings$/i,
+    tax:     /^airbnb\s*remitted\s*tax$/i,
   };
 
   /** Does this look like an Airbnb transaction export rather than a statement? */
@@ -557,8 +561,11 @@ const Statement = (() => {
         note: label,
         listing,
         currency: cell(r, 'currency') || null,
+        // Gross is what the guest paid, cleaning fee included. Airbnb's service
+        // fee is then deducted to give Amount, which is what actually lands.
+        gross:    num(cell(r, 'gross')),
         cleaning: num(cell(r, 'cleaning')),
-        hostFee: num(cell(r, 'hostfee')),
+        fee:      Math.abs(num(cell(r, 'hostfee')) || 0) + Math.abs(num(cell(r, 'fastpay')) || 0),
       });
     }
     return out;
