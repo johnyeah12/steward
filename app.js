@@ -957,6 +957,63 @@ const ROUGH_RATES = { 'PHP>HKD': 0.134, 'HKD>PHP': 7.46, 'USD>HKD': 7.8, 'HKD>US
                       'PHP>USD': 0.0172, 'USD>PHP': 58.2, 'EUR>HKD': 8.4, 'GBP>HKD': 9.9 };
 const guessRate = (from, to) => ROUGH_RATES[`${String(from).toUpperCase()}>${String(to).toUpperCase()}`] || 1;
 
+/* ── live exchange rates ──
+   Fetched when a rate is actually being entered, cached for the day, and
+   always overridable. The only thing sent is a currency code. If the network
+   is unavailable the last known rate is used and the UI says so — a rate is
+   never silently wrong. */
+
+const FX_KEY = 'st.fx';
+
+async function liveRate(from, to) {
+  from = String(from).toUpperCase(); to = String(to).toUpperCase();
+  if (from === to) return { rate: 1, source: 'same' };
+
+  const cache = lsGet(FX_KEY, {});
+  const key = `${from}>${to}`;
+  const today = todayISO();
+  if (cache[key] && cache[key].day === today) {
+    return { rate: cache[key].rate, at: cache[key].at, source: 'cached' };
+  }
+
+  try {
+    const res = await fetch(`https://open.er-api.com/v6/latest/${from}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.status);
+    const j = await res.json();
+    const r = j && j.rates && j.rates[to];
+    if (!r || !Number.isFinite(r)) throw new Error('no rate for ' + to);
+    cache[key] = { rate: r, day: today, at: j.time_last_update_utc || null };
+    lsSet(FX_KEY, cache);
+    return { rate: r, at: cache[key].at, source: 'live' };
+  } catch {
+    const stale = cache[key];
+    return stale ? { rate: stale.rate, at: stale.at, source: 'stale' } : { rate: null, source: 'failed' };
+  }
+}
+
+/**
+ * Fill a rate input from the live rate and explain where the number came from.
+ * `onRate` runs after, so any dependent total repaints.
+ */
+async function attachLiveRate(input, status, from, to, onRate) {
+  if (!input) return;
+  if (status) status.textContent = 'Checking today’s rate…';
+  const r = await liveRate(from, to);
+  if (!document.body.contains(input)) return;      // sheet closed meanwhile
+
+  if (r.rate != null && r.source !== 'same') {
+    input.value = +r.rate.toFixed(6);
+    if (onRate) onRate(r.rate);
+  }
+  if (!status) return;
+  status.textContent =
+      r.source === 'live'   ? `Today’s rate · 1 ${from} = ${(+r.rate.toFixed(6))} ${to}`
+    : r.source === 'cached' ? `Today’s rate (already fetched) · 1 ${from} = ${(+r.rate.toFixed(6))} ${to}`
+    : r.source === 'stale'  ? `Couldn’t reach the rate service — using the last one fetched${r.at ? ` (${r.at.slice(0, 16)})` : ''}`
+    : 'Couldn’t reach the rate service — check the rate yourself';
+  status.className = 'card-note ' + (r.source === 'failed' || r.source === 'stale' ? 'bad-note' : '');
+}
+
 function openAirbnbSheet() {
   $('#sheetBody').innerHTML = `
     <h3 class="sheet-title">Import from Airbnb</h3>
@@ -1023,6 +1080,7 @@ async function onAirbnbFile(file) {
       The rate below is only a starting point — <b>check today's rate and correct it</b>.
       What was earned in ${escapeHtml(cur)} is kept either way, so a wrong rate can be fixed later.</p>
       <label class="field"><span>1 ${escapeHtml(cur)} =</span><input id="abnbRate" type="number" inputmode="decimal" step="any" value="${guessRate(cur, S.cfg.cur)}"> </label>
+      <p id="abnbRateNote" class="card-note" style="margin:10px 0 0"></p>
     </div>` : ''}
     <div class="card">
       <div class="card-head">${usable.length} booking${usable.length === 1 ? '' : 's'} to import</div>
@@ -1060,6 +1118,7 @@ async function onAirbnbFile(file) {
   if (mismatch) {
     $('#abnbRate').addEventListener('input', paintTotal);
     paintTotal();          // the prefilled rate must apply before anyone types
+    attachLiveRate($('#abnbRate'), $('#abnbRateNote'), cur, S.cfg.cur, paintTotal);
   }
 
   $('#abnbGo').onclick = () => {
@@ -1189,7 +1248,8 @@ function openUptownSheet(kind) {
       <div style="height:14px"></div>` : ''}
       <label class="field"><span>Amount (<span id="upCurLbl">${escapeHtml(dual ? pc : S.cfg.cur)}</span>)</span><input id="upAmt" type="number" inputmode="decimal" step="any" placeholder="0"></label>
       ${dual ? `<label class="field"><span>1 ${escapeHtml(pc)} = ${escapeHtml(S.cfg.cur)}</span><input id="upRate" type="number" inputmode="decimal" step="any" value="${propRate()}"></label>
-      <div class="field"><span>Works out to</span><span id="upConv" class="conv-out">—</span></div>` : ''}
+      <div class="field"><span>Works out to</span><span id="upConv" class="conv-out">—</span></div>
+      <p id="upRateNote" class="card-note" style="margin:10px 0 0"></p>` : ''}
       <label class="field"><span>What for</span><input id="upNote" type="text" placeholder="${income ? 'e.g. Airbnb payout' : 'e.g. Cleaning'}" autocapitalize="sentences"></label>
       <label class="field"><span>Date</span><input id="upDate" type="date" value="${todayISO()}"></label>
       ${income ? '' : `<label class="field"><span>Category</span><select id="upCat">${allCats().map(c => `<option value="${c.k}"${c.k === 'home' ? ' selected' : ''}>${c.e} ${escapeHtml(c.n)}</option>`).join('')}</select></label>`}
@@ -1226,6 +1286,7 @@ function openUptownSheet(kind) {
     $('#upAmt').addEventListener('input', paint);
     $('#upRate').addEventListener('input', paint);
     paint();
+    attachLiveRate($('#upRate'), $('#upRateNote'), pc, S.cfg.cur, paint);
   }
 
   $('#upSave').onclick = () => {
@@ -1387,7 +1448,10 @@ function renderSettings() {
   $('#setPropCur').value = propCur();
   $('#setPropRate').value = propRate();
   $('#setPropRateLbl').textContent = `1 ${propCur()} = ${S.cfg.cur}`;
-  $('#setPropRate').closest('.field').classList.toggle('hidden', propCur() === S.cfg.cur);
+  const same = propCur() === S.cfg.cur;
+  $('#setPropRate').closest('.field').classList.toggle('hidden', same);
+  $('#setPropRateNow').classList.toggle('hidden', same);
+  $('#setPropRateNote').classList.toggle('hidden', same);
   const n = reduceLog().bills.length;
   $('#setLeadNote').textContent = n
     ? `${n} bill${n === 1 ? '' : 's'} being watched. Both of you get the reminder.`
@@ -2388,6 +2452,16 @@ function wireEvents() {
     S.cfg.propRate = guessRate(S.cfg.propCur, S.cfg.cur);
     lsSet(K.cfg, S.cfg);
     appendEvent({ k: 'cfg', p: { propCur: S.cfg.propCur, propRate: S.cfg.propRate } });
+    render(); sync();
+  });
+  $('#setPropRateNow').addEventListener('click', async () => {
+    const r = await liveRate(propCur(), S.cfg.cur);
+    await attachLiveRate($('#setPropRate'), $('#setPropRateNote'), propCur(), S.cfg.cur);
+    if (r.rate == null) { toast('Could not reach the rate service'); return; }
+    S.cfg.propRate = r.rate;
+    lsSet(K.cfg, S.cfg);
+    appendEvent({ k: 'cfg', p: { propRate: r.rate } });
+    toast(`Rate set to ${+r.rate.toFixed(6)}`);
     render(); sync();
   });
   $('#setPropRate').addEventListener('change', e => {
