@@ -1356,32 +1356,85 @@ function renderUptownSetup(all, running) {
   }
 
   const spent = setup.reduce((s, t) => s + inProp(t), 0);
-  const netSoFar = running.reduce((s, t) => s + (isIncome(t) ? inProp(t) : -inProp(t)), 0);
+
+  /* A mortgage payment is financing, not a cost of letting — it buys equity and
+     falls due whether or not there is a guest. Counting it against payback would
+     pin this bar at zero for the life of the loan and say nothing useful. */
+  const isFinancing = t => /home\s*loan|mortgage/i.test(t.note || '');
+  const netSoFar = running.filter(t => !isFinancing(t))
+    .reduce((s, t) => s + (isIncome(t) ? inProp(t) : -inProp(t)), 0);
   const recovered = Math.max(0, Math.min(netSoFar, spent));
   const pct = spent ? (recovered / spent) * 100 : 0;
 
-  // group by what it was for, biggest first
+  /* Group by what it was for, not by the full note — twenty billings from the
+     same designer are one line, "Interior design", not twenty. */
   const byKind = new Map();
   for (const t of setup) {
-    const k = t.note || 'Other setup';
+    const k = (t.note || 'Other setup').split(' — ')[0];
     byKind.set(k, (byKind.get(k) || 0) + inProp(t));
   }
   const rows = [...byKind.entries()].sort((a, b) => b[1] - a[1]);
 
+  /* Projected return, on gross earnings.
+     Gross is what guests paid, before the flat's running costs — a blunter
+     measure than net, but it answers "how fast does the fit-out come back"
+     without a thin month of bills swinging it. Only complete months count:
+     a half-finished month always reads as a bad one. */
+  const thisMonth = monthKey(todayISO());
+  const gross = new Map();
+  for (const t of running) {
+    if (!isIncome(t)) continue;
+    const m = monthKey(t.date);
+    if (m === thisMonth) continue;
+    gross.set(m, (gross.get(m) || 0) + inProp(t));
+  }
+  const live = [...gross.keys()].sort();
+  let roi = '';
+  if (live.length && spent > 0) {
+    const perMonth = [...gross.values()].reduce((s, v) => s + v, 0) / live.length;
+    const months = perMonth > 0 ? spent / perMonth : Infinity;
+    const yearly = (perMonth * 12) / spent * 100;
+    roi = `
+      <div class="ytd-row" style="margin-top:14px">
+        <span class="ytd-month">Gross earnings a month</span>
+        <span class="ytd-net">${moneyProp(Math.round(perMonth))}</span>
+      </div>
+      <div class="ytd-row">
+        <span class="ytd-month">Fit-out back in</span>
+        <span class="ytd-net">${months < 120 ? `${Math.ceil(months)} months` : 'not at this rate'}</span>
+      </div>
+      <div class="ytd-row ytd-total">
+        <span>Return a year, on gross</span><span class="ytd-net">${yearly.toFixed(0)}%</span>
+      </div>
+      <p class="card-note" style="margin:10px 0 0">
+        Projected from ${live.length} complete month${live.length === 1 ? '' : 's'}
+        of letting${live.length < 3 ? ' — too few to lean on yet' : ''}. Gross, so before the
+        flat's running costs and before the home loan, which buys equity rather than
+        being a cost of letting.
+      </p>`;
+  }
+
   box.innerHTML = `
+    <div class="card-head" style="margin-bottom:10px">What it cost to set up</div>
     ${rows.map(([k, v]) => `
       <div class="ytd-row">
         <span class="ytd-month">${escapeHtml(k)}</span>
         <span class="ytd-net">${moneyProp(v)}</span>
       </div>`).join('')}
     <div class="ytd-row ytd-total"><span>Put in so far</span><span class="ytd-net">${moneyProp(spent)}</span></div>
-    <div class="bar" style="margin-top:14px"><div class="bar-fill" style="width:${Math.max(2, pct)}%"></div></div>
+
+    <div class="card-head" style="margin:20px 0 10px">Projected return</div>
+    ${roi || `<p class="card-note" style="margin:0">No complete month of letting yet.</p>`}
+
+    <div class="bar" style="margin-top:16px"><div class="bar-fill" style="width:${Math.max(2, pct)}%"></div></div>
     <p class="card-note" style="margin:10px 0 0">
       ${netSoFar <= 0
         ? `The flat hasn't netted anything back yet — it is ${moneyProp(spent)} down so far.`
         : `Earned back <b>${moneyProp(recovered)}</b> of ${moneyProp(spent)} — <b>${pct.toFixed(0)}%</b>${
             pct >= 100 ? '. It has paid for itself.' : `, ${moneyProp(spent - recovered)} to go.`}`}
-      Counted against what the flat nets after its running costs, not against earnings alone.
+      This bar counts what the flat actually nets — earnings less its running costs — so it
+      moves slower than the gross figure above. The home loan is left out of both: it buys
+      equity rather than being a cost of letting.
     </p>`;
 }
 
