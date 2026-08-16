@@ -39,6 +39,104 @@
   }
 }
 
+/* ═══════════ Themes ═══════════
+   Each one is contrast-checked against both its own surfaces; the figures in
+   the comments are the measured ratios, and none is below the 4.5:1 minimum.
+   Chosen in Settings; "auto" simply follows the phone. */
+
+/* Maximum legibility: near-black text, hard separators, one flat surface. */
+:root[data-theme="contrast"] {
+  --bg:        #ffffff;
+  --bg-elev:   #ffffff;
+  --txt:       #000000;   /* 21.0:1 */
+  --txt-2:     #26262b;   /* 15.1:1 */
+  --txt-3:     #3a3a41;   /* 11.3:1 */
+  --sep:       rgba(0,0,0,.42);
+  --tint:      #4326c9;   /*  8.9:1 */
+  --tint-soft: rgba(67,38,201,.14);
+  --green:     #0f7a45;
+  --red:       #b3261e;
+  --amber:     #8a5a00;
+  --tabbar:    #ffffff;
+  --chart:     #4326c9;
+  --chart-track: rgba(67,38,201,.18);
+}
+:root[data-theme="contrast"] .card { border: 1px solid rgba(0,0,0,.18); }
+:root[data-theme="contrast"] .hdr,
+:root[data-theme="contrast"] .tabs { backdrop-filter: none; -webkit-backdrop-filter: none; }
+
+/* Paper-like and low-glare, for long reading or tired eyes. */
+:root[data-theme="warm"] {
+  --bg:        #f4ece0;
+  --bg-elev:   #fffaf2;
+  --txt:       #241f17;   /* 14.0:1 */
+  --txt-2:     #4b4235;   /*  8.4:1 */
+  --txt-3:     #5f5647;   /*  6.2:1 */
+  --sep:       rgba(60,48,30,.24);
+  --tint:      #6a3fd0;   /*  5.5:1 */
+  --tint-soft: rgba(106,63,208,.13);
+  --green:     #1f7a4d;
+  --red:       #b53a2e;
+  --amber:     #96631a;
+  --tabbar:    rgba(255,250,242,.9);
+  --chart:     #6a3fd0;
+  --chart-track: rgba(106,63,208,.15);
+}
+
+/* Dark without the pure-black glare, and brighter text than the default. */
+:root[data-theme="night"] {
+  --bg:        #12141a;
+  --bg-elev:   #1b1f27;
+  --txt:       #f2f4f8;   /* 15.0:1 */
+  --txt-2:     #c2c7d2;   /*  9.7:1 */
+  --txt-3:     #a3a9b6;   /*  7.0:1 */
+  --sep:       rgba(160,170,190,.30);
+  --tint:      #9d8bff;   /*  6.0:1 */
+  --tint-soft: rgba(157,139,255,.18);
+  --green:     #45d68d;
+  --red:       #ff7a72;
+  --amber:     #ffc46b;
+  --tabbar:    rgba(20,23,30,.9);
+  --chart:     #8f74f0;
+  --chart-track: rgba(143,116,240,.22);
+}
+
+/* Forced light or dark, overriding what the phone prefers. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000; --bg-elev: #1c1c1e;
+  --txt: #ffffff; --txt-2: #b6b6bd; --txt-3: #9a9aa2;
+  --sep: rgba(120,120,128,.55);
+  --tint: #a48cff; --tint-soft: rgba(164,140,255,.16);
+  --green: #34d17e; --red: #ff6961; --amber: #ffc25c;
+  --tabbar: rgba(22,22,24,.82);
+  --chart: #8f74f0; --chart-track: rgba(143,116,240,.20);
+}
+
+/* ── Text size ──
+   Scales the surfaces that carry reading, rather than every rule. */
+:root[data-text="large"] {
+  --t-body: 18.5px; --t-row: 17.5px; --t-meta: 15px; --t-small: 14.5px; --t-label: 16.5px;
+}
+:root[data-text="larger"] {
+  --t-body: 20px; --t-row: 19px; --t-meta: 16px; --t-small: 15.5px; --t-label: 18px;
+}
+:root[data-text] body { font-size: var(--t-body, 17px); }
+:root[data-text] .hist-note, :root[data-text] .bill-name, :root[data-text] .detail-name,
+:root[data-text] .chart-name, :root[data-text] .due-name, :root[data-text] .cat-pick,
+:root[data-text] .hist-amt, :root[data-text] .bill-amt, :root[data-text] .detail-amt,
+:root[data-text] .chart-val { font-size: var(--t-row, 16px); }
+:root[data-text] .hist-meta, :root[data-text] .bill-when, :root[data-text] .due-meta,
+:root[data-text] .detail-date, :root[data-text] .detail-src, :root[data-text] .chart-pct,
+:root[data-text] .ytd-row { font-size: var(--t-meta, 13.5px); }
+:root[data-text] .card-note, :root[data-text] .chart-cap, :root[data-text] .detail-foot,
+:root[data-text] .detail-hint, :root[data-text] .preview-table { font-size: var(--t-small, 13.5px); }
+:root[data-text] .field > span, :root[data-text] .card-head,
+:root[data-text] .hdr-title, :root[data-text] .setup-sub { font-size: var(--t-label, 15px); }
+:root[data-text] .pill { font-size: calc(var(--t-meta, 13.5px) - 2px); }
+:root[data-text] .tabs button { font-size: calc(var(--t-small, 13.5px) - 3px); }
+
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 /* Safari holds a tap for ~300ms to see whether it becomes a double-tap-to-zoom.

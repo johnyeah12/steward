@@ -342,6 +342,29 @@ function billStatus(bill, txns, mk, today = todayISO(), lead = leadDays()) {
   return { state: 'idle', due, days };
 }
 
+/* ── appearance ──
+   Applied to the root element so every theme is just a different set of
+   custom properties. Read from the shared settings, so choosing a theme on
+   one phone reaches the other. */
+
+const themeOf = () => (S.shared && S.shared.theme) || (S.cfg && S.cfg.theme) || 'auto';
+const textOf  = () => (S.shared && S.shared.text)  || (S.cfg && S.cfg.text)  || 'normal';
+
+function applyAppearance() {
+  const root = document.documentElement;
+  const theme = themeOf();
+  if (theme === 'auto') root.removeAttribute('data-theme');
+  else root.dataset.theme = theme;
+
+  const text = textOf();
+  if (text === 'normal') root.removeAttribute('data-text');
+  else root.dataset.text = text;
+
+  // keep the browser chrome in step with the surface behind it
+  const bg = getComputedStyle(root).getPropertyValue('--bg').trim();
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', bg));
+}
+
 /** Shared settings ride in the event log so both phones — and the reminder
     job — agree on them. Local cfg is only a fallback. */
 function sharedSettings() {
@@ -707,6 +730,7 @@ function paintSyncInfo() {
 
 function render() {
   if (!S.cfg) return;
+  applyAppearance();      // a theme chosen on the other phone arrives with a sync
   renderHome();
   renderDueCard();
   renderBills();
@@ -1444,6 +1468,8 @@ function renderSettings() {
   $('#setMe').value = S.cfg.me;
   $('#setBudget').value = S.cfg.budget || '';
   $('#setBudgetCur').textContent = `Amount (${S.cfg.cur})`;
+  $('#setTheme').value = themeOf();
+  $('#setText').value = textOf();
   $('#setLead').value = String(leadDays());
   $('#setPropCur').value = propCur();
   $('#setPropRate').value = propRate();
@@ -2264,6 +2290,7 @@ async function boot() {
   S.log = lsGet(K.log, { v: 1, events: [] });
   if (!S.log || !Array.isArray(S.log.events)) S.log = { v: 1, events: [] };
 
+  applyAppearance();      // before first paint, so the lock screen is right too
   wireEvents();
 
   const hasVault = !!lsGet(K.vault, null);
@@ -2446,6 +2473,18 @@ function wireEvents() {
     lsSet(K.cfg, S.cfg);
     appendEvent({ k: 'cfg', p: { lead: S.cfg.lead } });   // the reminder job reads this
     render(); sync();
+  });
+  $('#setTheme').addEventListener('change', e => {
+    S.cfg.theme = e.target.value;
+    lsSet(K.cfg, S.cfg);
+    appendEvent({ k: 'cfg', p: { theme: S.cfg.theme } });
+    applyAppearance(); render(); sync();
+  });
+  $('#setText').addEventListener('change', e => {
+    S.cfg.text = e.target.value;
+    lsSet(K.cfg, S.cfg);
+    appendEvent({ k: 'cfg', p: { text: S.cfg.text } });
+    applyAppearance(); render(); sync();
   });
   $('#setPropCur').addEventListener('change', e => {
     S.cfg.propCur = e.target.value;
