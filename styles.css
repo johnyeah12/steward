@@ -409,6 +409,7 @@ button { background: none; border: 0; cursor: pointer; }
   transition: background .15s, color .15s;
 }
 .seg button.on { background: var(--bg-elev); color: var(--txt); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.seg-inline { flex: 1; display: flex; max-width: 190px; margin-left: auto; }
 
 /* ─────────── Bills ─────────── */
 .hero-sm { padding: 10px 0 18px; }
@@ -437,6 +438,7 @@ button { background: none; border: 0; cursor: pointer; }
 .bill-when { display: block; font-size: 13.5px; color: var(--txt-2); margin-top: 3px; }
 .bill-right { text-align: right; white-space: nowrap; }
 .bill-amt { display: block; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bill-alt { display: block; font-size: 13px; color: var(--txt-2); font-variant-numeric: tabular-nums; margin-top: 1px; }
 
 .pill {
   display: inline-block; margin-top: 4px;

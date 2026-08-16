@@ -1104,8 +1104,11 @@ function renderUptownBills(mk, txns) {
 
   const PILL = { paid: 'pill-paid', soon: 'pill-soon', late: 'pill-late', idle: 'pill-idle', open: 'pill-idle' };
   const states = mine.map(b => billStatus(b, txns, mk));
+  const dual = propCur() !== S.cfg.cur;
   const due = mine.reduce((s, b, i) => s + (states[i].state === 'paid' ? 0 : b.amt), 0);
   const total = mine.reduce((s, b) => s + b.amt, 0);
+  const totalP = mine.reduce((s, b) => s + inProp(b), 0);
+  const dueP = mine.reduce((s, b, i) => s + (states[i].state === 'paid' ? 0 : inProp(b)), 0);
 
   $('#upBills').innerHTML = `
     ${mine.map((b, i) => {
@@ -1116,13 +1119,14 @@ function renderUptownBills(mk, txns) {
           <span class="bill-when">${b.day ? 'Due the ' + ordinal(b.day) : 'Monthly'}</span>
         </span>
         <span class="bill-right">
-          <span class="bill-amt">${money(b.amt)}</span>
+          <span class="bill-amt">${dual ? moneyProp(inProp(b)) : money(b.amt)}</span>
+          ${dual ? `<span class="bill-alt">${money(b.amt)}</span>` : ''}
           <span class="pill ${PILL[st.state]}">${dueLabel(st)}</span>
         </span>
       </div>`;
     }).join('')}
-    <div class="preview-total"><span>${mine.length} bill${mine.length === 1 ? '' : 's'} a month</span><span>${money(total)}</span></div>
-    ${due ? `<div class="preview-total"><span>Still to pay</span><span>${money(due)}</span></div>` : ''}`;
+    <div class="preview-total"><span>${mine.length} bill${mine.length === 1 ? '' : 's'} a month</span><span>${dual ? moneyProp(totalP) + ' · ' + money(total) : money(total)}</span></div>
+    ${due ? `<div class="preview-total"><span>Still to pay</span><span>${dual ? moneyProp(dueP) + ' · ' + money(due) : money(due)}</span></div>` : ''}`;
 }
 
 /**
@@ -1738,13 +1742,21 @@ function openBillSheet(billId) {
   const b = billId ? bills.find(x => x.id === billId) : null;
   const dp = ZERO_DP.has(S.cfg.cur) ? 0 : 2;
   const st = b ? billStatus(b, txns, S.month) : null;
+  const bSrc = b ? srcOf(b) : null;
+  // a bill belonging to the flat may genuinely be billed in the flat's currency
+  const bDual = propCur() !== S.cfg.cur &&
+    (bSrc || (b && (b.prop === 'uptown' || (b.prop !== 'no' && UPTOWN_AUTO.test(b.name)))));
 
   $('#sheetBody').innerHTML = `
     <h3 class="sheet-title">${b ? 'Edit bill' : 'New monthly bill'}</h3>
     <p class="sheet-sub">${b ? dueLabel(st) + ' · ' + monthName(S.month) : 'Repeats every month'}</p>
     <div class="card">
       <label class="field"><span>Name</span><input id="bName" type="text" value="${b ? escapeHtml(b.name) : ''}" placeholder="e.g. Internet" autocapitalize="words"></label>
-      <label class="field"><span>Amount (${S.cfg.cur})</span><input id="bAmt" type="number" inputmode="decimal" step="any" value="${b ? (ZERO_DP.has(S.cfg.cur) ? b.amt : b.amt / 100).toFixed(dp) : ''}" placeholder="0"></label>
+      <label class="field"><span>Amount (<span id="bCurLbl">${escapeHtml(bSrc ? bSrc.cur : S.cfg.cur)}</span>)</span><input id="bAmt" type="number" inputmode="decimal" step="any" value="${b ? (bSrc ? (ZERO_DP.has(bSrc.cur) ? bSrc.amt : bSrc.amt / 100).toFixed(ZERO_DP.has(bSrc.cur) ? 0 : 2) : (ZERO_DP.has(S.cfg.cur) ? b.amt : b.amt / 100).toFixed(dp)) : ''}" placeholder="0"></label>
+      ${bDual ? `<div class="field"><span>Currency</span><span class="seg seg-inline" id="bCurSeg">
+        <button type="button" data-v="${escapeHtml(propCur())}" class="${bSrc ? 'on' : ''}">${escapeHtml(propCur())}</button><button type="button" data-v="${escapeHtml(S.cfg.cur)}" class="${bSrc ? '' : 'on'}">${escapeHtml(S.cfg.cur)}</button>
+      </span></div>
+      <div class="field"><span>Works out to</span><span id="bConv" class="conv-out">—</span></div>` : ''}
       <label class="field"><span>On card</span><input id="bCC" type="number" inputmode="decimal" step="any" value="${b && b.cc ? (ZERO_DP.has(S.cfg.cur) ? b.cc : b.cc / 100).toFixed(dp) : ''}" placeholder="0 = not on card"></label>
       <label class="field"><span>Section</span><input id="bGrp" type="text" value="${b && b.grp ? escapeHtml(b.grp) : ''}" placeholder="e.g. HK HOUSEHOLD" autocapitalize="characters"></label>
       <label class="field"><span>Due day</span><input id="bDay" type="number" inputmode="numeric" min="1" max="31" value="${b && b.day ? b.day : ''}" placeholder="blank = no reminder"></label>
@@ -1767,6 +1779,28 @@ function openBillSheet(billId) {
   $('#sheet').classList.remove('hidden');
   $('#bClose').onclick = closeSheet;
 
+  let bEntered = bSrc ? bSrc.cur : S.cfg.cur;
+  const bPaint = () => {
+    if (!bDual) return;
+    const v = parseFloat($('#bAmt').value);
+    const r = propRate();
+    if (!v || v <= 0) { $('#bConv').textContent = '—'; return; }
+    $('#bConv').textContent = bEntered === propCur()
+      ? money(Math.round(v * r * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)))
+      : moneyProp(Math.round((v / r) * (ZERO_DP.has(propCur()) ? 1 : 100)));
+  };
+  if (bDual) {
+    $('#bCurSeg').addEventListener('click', e => {
+      const x = e.target.closest('button[data-v]'); if (!x) return;
+      bEntered = x.dataset.v;
+      [...$('#bCurSeg').children].forEach(y => y.classList.toggle('on', y === x));
+      $('#bCurLbl').textContent = bEntered;
+      bPaint();
+    });
+    $('#bAmt').addEventListener('input', bPaint);
+    bPaint();
+  }
+
   $('#bSave').onclick = () => {
     const name = $('#bName').value.trim();
     const amt = parseFloat($('#bAmt').value);
@@ -1778,12 +1812,21 @@ function openBillSheet(billId) {
 
     const unit = ZERO_DP.has(S.cfg.cur) ? 1 : 100;
     const ccVal = parseFloat($('#bCC').value);
+    // when the bill is billed in the flat's currency, that figure is the
+    // source of truth and the household amount is derived from it
+    const inProp_ = bDual && bEntered === propCur();
+    const r = propRate();
+    const appAmt = inProp_ ? Math.round(amt * r * unit) : Math.round(amt * unit);
+
     const payload = {
-      name, amt: Math.round(amt * unit), day,
-      cc: ccVal > 0 ? Math.min(Math.round(ccVal * unit), Math.round(amt * unit)) : 0,
+      name, amt: appAmt, day,
+      cc: ccVal > 0 ? Math.min(Math.round(ccVal * unit), appAmt) : 0,
       grp: $('#bGrp').value.trim() || null,
       cat: $('#bCat').value, payer: $('#bPayer').value,
       prop: $('#bProp').value === 'uptown' ? 'uptown' : 'no',
+      ...(inProp_
+        ? { src: { cur: propCur(), amt: Math.round(amt * (ZERO_DP.has(propCur()) ? 1 : 100)) }, rate: r }
+        : { src: null, rate: null }),
     };
     if (b) appendEvent({ k: 'bedit', x: b.id, p: payload });
     else   appendEvent({ k: 'badd', x: { id: uid(), seq: bills.reduce((m, x) => Math.max(m, x.seq ?? 0), 0) + 1, ...payload } });
