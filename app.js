@@ -880,7 +880,8 @@ function renderUptown() {
   const netP = earnedP - spentP;
 
   $('#upMonth').textContent = `Uptown · ${monthName(mk)}`;
-  $('#upNet').textContent = moneyProp(Math.abs(netP));
+  // a loss must read as one — colour alone is not enough
+  $('#upNet').textContent = (netP < 0 ? '−' : '') + moneyProp(Math.abs(netP));
   $('#upNet').className = 'hero-amount hero-amount-sm ' + (netP >= 0 ? 'pos' : 'neg');
   $('#upNetNote').innerHTML = !month.length
     ? 'Nothing recorded for this month yet'
