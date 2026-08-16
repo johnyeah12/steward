@@ -212,6 +212,34 @@ const moneyIn = (minor, cur) =>
     converted figure, so the source of truth is never lost to a rate. */
 const srcOf = t => (t.src && t.src.cur && t.src.amt != null ? t.src : null);
 
+/* ── the Uptown flat keeps its own books ──
+   It is in Manila: it earns and spends pesos, so that tab reads in pesos and
+   the household figure sits beside it. Amounts are still stored in the app's
+   currency so household totals stay coherent. */
+
+// read from the shared settings cached by reduceLog, so both phones agree and
+// this stays cheap enough to call per row
+const propCur  = () => (S.shared && S.shared.propCur) || (S.cfg && S.cfg.propCur) || 'PHP';
+const propRate = () => Number((S.shared && S.shared.propRate) || (S.cfg && S.cfg.propRate))
+                     || guessRate(propCur(), S.cfg.cur);
+
+/** An entry's value in the property's own currency. */
+function inProp(t) {
+  const s = srcOf(t);
+  if (s && s.cur === propCur()) return s.amt;
+  const r = (s && t.rate) || propRate();
+  if (!r) return 0;
+  const appMinor = ZERO_DP.has(S.cfg.cur) ? t.amt * 100 : t.amt;   // normalise to 2dp
+  const propMinor = appMinor / r;
+  return Math.round(ZERO_DP.has(propCur()) ? propMinor / 100 : propMinor);
+}
+const moneyProp = minor => moneyIn(minor, propCur());
+/** Whole units, for the year-to-date table where two decimals overflow. */
+const moneyPropShort = minor => {
+  const c = propCur();
+  return (SYMBOL[c] || (c + ' ')) + (ZERO_DP.has(c) ? minor : Math.round(minor / 100)).toLocaleString();
+};
+
 /** Whole-unit money for dense tables, where two decimals per cell overflow. */
 const moneyShort = cents => {
   const n = ZERO_DP.has(S.cfg?.cur) ? cents : Math.round(cents / 100);
@@ -264,6 +292,7 @@ function reduceLog() {
   const bmap = new Map();
   const cmap = new Map();
   const rmap = new Map();
+  const shared = {};
 
   for (const e of evs) {
     if (e.k === 'add')    map.set(e.x.id, { ...e.x, _born: e.t });
@@ -272,6 +301,7 @@ function reduceLog() {
     else if (e.k === 'catadd') cmap.set(e.x.k, { ...e.x });
     else if (e.k === 'catdel') cmap.delete(e.x);
     else if (e.k === 'rule')   rmap.set(e.x.key, e.x.cat);   // later rules win
+    else if (e.k === 'cfg')    Object.assign(shared, e.p || {});
     else if (e.k === 'badd')  bmap.set(e.x.id, { ...e.x });
     else if (e.k === 'bedit') { const cur = bmap.get(e.x); if (cur) bmap.set(e.x, { ...cur, ...e.p }); }
     else if (e.k === 'bdel')  bmap.delete(e.x);
@@ -283,7 +313,8 @@ function reduceLog() {
     (x.seq ?? 1e9) - (y.seq ?? 1e9) || (x.name > y.name ? 1 : -1));
   S.customCats = [...cmap.values()];
   S.rules = rmap;
-  return { txns, bills, cats: S.customCats, rules: rmap };
+  S.shared = shared;          // settings both phones agree on
+  return { txns, bills, cats: S.customCats, rules: rmap, shared };
 }
 
 /* ───────────────────────── Bills ───────────────────────── */
@@ -843,29 +874,33 @@ function renderUptown() {
   const spent  = month.filter(isSpend).reduce((s, t) => s + t.amt, 0);
   const net = earned - spent;
 
-  $('#upMonth').textContent = `Uptown · ${monthName(mk)}`;
-  $('#upNet').textContent = money(Math.abs(net));
-  $('#upNet').className = 'hero-amount hero-amount-sm ' + (net >= 0 ? 'pos' : 'neg');
-  $('#upNetNote').textContent = !month.length
-    ? 'Nothing recorded for this month yet'
-    : `${money(earned)} in · ${money(spent)} out · ${net >= 0 ? 'ahead' : 'behind'}`;
-  $('#upNetNote').className = 'hero-delta ' + (net >= 0 ? 'down' : 'up');
+  // the flat reads in its own currency, with the household figure beside it
+  const earnedP = month.filter(isIncome).reduce((s, t) => s + inProp(t), 0);
+  const spentP  = month.filter(isSpend).reduce((s, t) => s + inProp(t), 0);
+  const netP = earnedP - spentP;
 
-  // when entries were earned in another currency, show that alongside ours
-  const anySrc = month.some(srcOf);
+  $('#upMonth').textContent = `Uptown · ${monthName(mk)}`;
+  $('#upNet').textContent = moneyProp(Math.abs(netP));
+  $('#upNet').className = 'hero-amount hero-amount-sm ' + (netP >= 0 ? 'pos' : 'neg');
+  $('#upNetNote').innerHTML = !month.length
+    ? 'Nothing recorded for this month yet'
+    : `${moneyProp(earnedP)} in · ${moneyProp(spentP)} out<br>
+       <span class="hero-sub">${net >= 0 ? '' : '−'}${money(Math.abs(net))} in ${escapeHtml(S.cfg.cur)}</span>`;
+  $('#upNetNote').className = 'hero-delta ' + (netP >= 0 ? 'down' : 'up');
+
+  // the flat's own currency leads; ours sits beside it
+  const dual = propCur() !== S.cfg.cur;
   const list = (rows, empty) => rows.length
-    ? (anySrc ? `<div class="detail-row detail-head">
-          <span>What</span><span>When</span><span>Earned</span><span>In ${escapeHtml(S.cfg.cur)}</span>
+    ? (dual ? `<div class="detail-row detail-head">
+          <span>What</span><span>When</span><span>${escapeHtml(propCur())}</span><span>${escapeHtml(S.cfg.cur)}</span>
         </div>` : '') +
-      rows.sort((a, b) => b.amt - a.amt || (a.date < b.date ? 1 : -1)).map(t => {
-        const s = srcOf(t);
-        return `<div class="detail-row${anySrc ? ' has-src' : ''}" role="button" tabindex="0" data-txn="${t.id}">
+      rows.sort((a, b) => inProp(b) - inProp(a) || (a.date < b.date ? 1 : -1)).map(t => `
+        <div class="detail-row${dual ? ' has-src' : ''}" role="button" tabindex="0" data-txn="${t.id}">
           <span class="detail-name">${escapeHtml(t.note || catOf(t.cat).n)}</span>
           <span class="detail-date">${t.date.slice(5).replace('-', '/')}</span>
-          ${anySrc ? `<span class="detail-src">${s ? moneyIn(s.amt, s.cur) : '—'}</span>` : ''}
+          ${dual ? `<span class="detail-src">${moneyProp(inProp(t))}</span>` : ''}
           <span class="detail-amt">${money(t.amt)}</span>
-        </div>`;
-      }).join('')
+        </div>`).join('')
     : `<div class="empty">${empty}</div>`;
 
   $('#upIn').innerHTML  = list(month.filter(isIncome), 'No earnings logged for this month');
@@ -880,15 +915,15 @@ function renderUptown() {
   }
   let ytdIn = 0, ytdOut = 0;
   const rows = months.map(m => {
-    const inM  = mine.filter(t => monthKey(t.date) === m && isIncome(t)).reduce((s, t) => s + t.amt, 0);
-    const outM = mine.filter(t => monthKey(t.date) === m && isSpend(t)).reduce((s, t) => s + t.amt, 0);
+    const inM  = mine.filter(t => monthKey(t.date) === m && isIncome(t)).reduce((s, t) => s + inProp(t), 0);
+    const outM = mine.filter(t => monthKey(t.date) === m && isSpend(t)).reduce((s, t) => s + inProp(t), 0);
     ytdIn += inM; ytdOut += outM;
     const n = inM - outM;
     return `<div class="ytd-row">
       <span class="ytd-month">${escapeHtml(monthName(m).slice(0, 3))}</span>
-      <span class="ytd-in">${inM ? '+' + moneyShort(inM) : '—'}</span>
-      <span class="ytd-out">${outM ? '−' + moneyShort(outM) : '—'}</span>
-      <span class="ytd-net ${n >= 0 ? 'pos' : 'neg'}">${n >= 0 ? '' : '−'}${moneyShort(Math.abs(n))}</span>
+      <span class="ytd-in">${inM ? '+' + moneyPropShort(inM) : '—'}</span>
+      <span class="ytd-out">${outM ? '−' + moneyPropShort(outM) : '—'}</span>
+      <span class="ytd-net ${n >= 0 ? 'pos' : 'neg'}">${n >= 0 ? '' : '−'}${moneyPropShort(Math.abs(n))}</span>
     </div>`;
   }).join('');
   const ytdNet = ytdIn - ytdOut;
@@ -897,9 +932,9 @@ function renderUptown() {
     ${rows}
     <div class="ytd-row ytd-total">
       <span>${year}</span>
-      <span class="ytd-in">${ytdIn ? '+' + moneyShort(ytdIn) : '—'}</span>
-      <span class="ytd-out">${ytdOut ? '−' + moneyShort(ytdOut) : '—'}</span>
-      <span class="ytd-net ${ytdNet >= 0 ? 'pos' : 'neg'}">${ytdNet >= 0 ? '' : '−'}${moneyShort(Math.abs(ytdNet))}</span>
+      <span class="ytd-in">${ytdIn ? '+' + moneyPropShort(ytdIn) : '—'}</span>
+      <span class="ytd-out">${ytdOut ? '−' + moneyPropShort(ytdOut) : '—'}</span>
+      <span class="ytd-net ${ytdNet >= 0 ? 'pos' : 'neg'}">${ytdNet >= 0 ? '' : '−'}${moneyPropShort(Math.abs(ytdNet))}</span>
     </div>`;
 }
 
@@ -1043,11 +1078,22 @@ async function onAirbnbFile(file) {
 /** Log an Uptown earning or cost. */
 function openUptownSheet(kind) {
   const income = kind === 'in';
+  const pc = propCur();
+  const dual = pc !== S.cfg.cur;
+
   $('#sheetBody').innerHTML = `
     <h3 class="sheet-title">${income ? 'Uptown earning' : 'Uptown cost'}</h3>
     <p class="sheet-sub">${income ? 'An Airbnb payout or other rent received.' : 'Something the flat cost you.'}</p>
     <div class="card">
-      <label class="field"><span>Amount (${S.cfg.cur})</span><input id="upAmt" type="number" inputmode="decimal" step="any" placeholder="0"></label>
+      ${dual ? `<div class="card-head">Currency</div>
+      <div class="seg" id="upCurSeg">
+        <button data-v="${escapeHtml(pc)}" class="on">${escapeHtml(pc)}</button>
+        <button data-v="${escapeHtml(S.cfg.cur)}">${escapeHtml(S.cfg.cur)}</button>
+      </div>
+      <div style="height:14px"></div>` : ''}
+      <label class="field"><span>Amount (<span id="upCurLbl">${escapeHtml(dual ? pc : S.cfg.cur)}</span>)</span><input id="upAmt" type="number" inputmode="decimal" step="any" placeholder="0"></label>
+      ${dual ? `<label class="field"><span>1 ${escapeHtml(pc)} = ${escapeHtml(S.cfg.cur)}</span><input id="upRate" type="number" inputmode="decimal" step="any" value="${propRate()}"></label>
+      <div class="field"><span>Works out to</span><span id="upConv" class="conv-out">—</span></div>` : ''}
       <label class="field"><span>What for</span><input id="upNote" type="text" placeholder="${income ? 'e.g. Airbnb payout' : 'e.g. Cleaning'}" autocapitalize="sentences"></label>
       <label class="field"><span>Date</span><input id="upDate" type="date" value="${todayISO()}"></label>
       ${income ? '' : `<label class="field"><span>Category</span><select id="upCat">${allCats().map(c => `<option value="${c.k}"${c.k === 'home' ? ' selected' : ''}>${c.e} ${escapeHtml(c.n)}</option>`).join('')}</select></label>`}
@@ -1060,18 +1106,56 @@ function openUptownSheet(kind) {
   $('#upClose').onclick = closeSheet;
   setTimeout(() => $('#upAmt').focus(), 150);
 
+  let entered = dual ? pc : S.cfg.cur;      // what the typed number means
+
+  const paint = () => {
+    if (!dual) return;
+    const v = parseFloat($('#upAmt').value);
+    const r = parseFloat($('#upRate').value) || propRate();
+    $('#upRate').closest('.field').classList.toggle('hidden', entered !== pc);
+    if (!v || v <= 0) { $('#upConv').textContent = '—'; return; }
+    $('#upConv').textContent = entered === pc
+      ? money(Math.round(v * r * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)))
+      : moneyProp(Math.round((v / r) * (ZERO_DP.has(pc) ? 1 : 100)));
+  };
+
+  if (dual) {
+    $('#upCurSeg').addEventListener('click', e => {
+      const b = e.target.closest('button[data-v]'); if (!b) return;
+      entered = b.dataset.v;
+      [...$('#upCurSeg').children].forEach(x => x.classList.toggle('on', x === b));
+      $('#upCurLbl').textContent = entered;
+      paint();
+    });
+    $('#upAmt').addEventListener('input', paint);
+    $('#upRate').addEventListener('input', paint);
+    paint();
+  }
+
   $('#upSave').onclick = () => {
     const v = parseFloat($('#upAmt').value);
     if (!v || v <= 0) { toast('Enter an amount'); return; }
-    const unit = ZERO_DP.has(S.cfg.cur) ? 1 : 100;
+    const appUnit = ZERO_DP.has(S.cfg.cur) ? 1 : 100;
+    const r = dual ? (parseFloat($('#upRate').value) || propRate()) : 1;
+
+    let amt, src = null;
+    if (dual && entered === pc) {
+      amt = Math.round(v * r * appUnit);
+      src = { cur: pc, amt: Math.round(v * (ZERO_DP.has(pc) ? 1 : 100)) };
+    } else {
+      amt = Math.round(v * appUnit);           // entered in our own currency
+    }
+
     appendEvent({
       k: 'add',
       x: {
-        id: uid(), amt: Math.round(v * unit),
+        id: uid(), amt,
         cat: income ? 'misc' : $('#upCat').value,
         note: $('#upNote').value.trim() || (income ? 'Airbnb payout' : 'Uptown cost'),
         date: $('#upDate').value || todayISO(),
-        payer: iAm(), prop: 'uptown', ...(income ? { kind: 'in' } : {}),
+        payer: iAm(), prop: 'uptown',
+        ...(income ? { kind: 'in' } : {}),
+        ...(src ? { src, rate: r } : {}),
       },
     });
     closeSheet();
@@ -1191,6 +1275,10 @@ function renderSettings() {
   $('#setBudget').value = S.cfg.budget || '';
   $('#setBudgetCur').textContent = `Amount (${S.cfg.cur})`;
   $('#setLead').value = String(leadDays());
+  $('#setPropCur').value = propCur();
+  $('#setPropRate').value = propRate();
+  $('#setPropRateLbl').textContent = `1 ${propCur()} = ${S.cfg.cur}`;
+  $('#setPropRate').closest('.field').classList.toggle('hidden', propCur() === S.cfg.cur);
   const n = reduceLog().bills.length;
   $('#setLeadNote').textContent = n
     ? `${n} bill${n === 1 ? '' : 's'} being watched. Both of you get the reminder.`
@@ -2137,6 +2225,21 @@ function wireEvents() {
     appendEvent({ k: 'cfg', p: { lead: S.cfg.lead } });   // the reminder job reads this
     render(); sync();
   });
+  $('#setPropCur').addEventListener('change', e => {
+    S.cfg.propCur = e.target.value;
+    S.cfg.propRate = guessRate(S.cfg.propCur, S.cfg.cur);
+    lsSet(K.cfg, S.cfg);
+    appendEvent({ k: 'cfg', p: { propCur: S.cfg.propCur, propRate: S.cfg.propRate } });
+    render(); sync();
+  });
+  $('#setPropRate').addEventListener('change', e => {
+    const v = parseFloat(e.target.value);
+    if (!v || v <= 0) { toast('Enter a rate above zero'); renderSettings(); return; }
+    S.cfg.propRate = v;
+    lsSet(K.cfg, S.cfg);
+    appendEvent({ k: 'cfg', p: { propRate: v } });
+    render(); sync();
+  });
   $('#setSyncNow').addEventListener('click', () => sync({ quiet: false }));
   $('#setForget').addEventListener('click', () => {
     if (!confirm('Erase the token and local copy from this phone? Your data stays safe in the repo.')) return;
@@ -2205,7 +2308,11 @@ async function finishSetup() {
   lsSet(K.cfg, S.cfg);
   await sealVault(pin, S.secret);
   // share what the reminder job needs to format its messages
-  appendEvent({ k: 'cfg', p: { cur: S.cfg.cur, lead: 3, nameA, nameB } });
+  S.cfg.propCur = 'PHP';
+  S.cfg.propRate = guessRate('PHP', S.cfg.cur);
+  lsSet(K.cfg, S.cfg);
+  appendEvent({ k: 'cfg', p: { cur: S.cfg.cur, lead: 3, nameA, nameB,
+                               propCur: S.cfg.propCur, propRate: S.cfg.propRate } });
   enterApp();
   toast('All set — add your first expense');
 }

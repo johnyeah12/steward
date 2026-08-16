@@ -272,6 +272,20 @@
         <label class="field"><span>This phone is</span><select id="setMe"><option value="a"></option><option value="b"></option></select></label>
       </div>
       <div class="card">
+        <div class="card-head">Uptown flat</div>
+        <p class="card-note">The flat keeps its own books. Amounts you enter there default to this currency, and the household figure is shown beside it.</p>
+        <label class="field"><span>Its currency</span>
+          <select id="setPropCur">
+            <option value="PHP">PHP — ₱</option>
+            <option value="HKD">HKD — HK$</option>
+            <option value="USD">USD — $</option>
+            <option value="SGD">SGD — S$</option>
+          </select>
+        </label>
+        <label class="field"><span id="setPropRateLbl">Rate</span><input id="setPropRate" type="number" inputmode="decimal" step="any"></label>
+      </div>
+
+      <div class="card">
         <div class="card-head">Bill reminders</div>
         <p class="card-note">Reminders are sent by a daily job in your data repo, so they arrive even when this phone and the Mac are asleep. Set them up once with <b>./setup-reminders.sh</b>.</p>
         <label class="field"><span>Warn me</span>

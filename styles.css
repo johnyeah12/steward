@@ -321,6 +321,7 @@ button { background: none; border: 0; cursor: pointer; }
 
 .split-row { display: flex; gap: 10px; margin-bottom: 14px; }
 .split-row .btn { flex: 1; }
+.hero-sub { color: var(--txt-3); font-size: 13px; }
 .hero-amount.pos { color: var(--green); }
 .hero-amount.neg { color: var(--red); }
 
