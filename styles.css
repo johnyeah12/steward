@@ -784,6 +784,13 @@ button { background: none; border: 0; cursor: pointer; }
   @keyframes pop { from { transform: scale(.96); opacity: 0 } }
   .sheet-grab { display: none; }
 
+  /* On a phone the bar is a sliver beside the name; given room it should
+     actually be readable rather than leaving a channel of dead space. */
+  .assess-hero { font-size: 38px; }
+  .assess-row { grid-template-columns: minmax(0, 1fr) minmax(110px, .9fr) auto; }
+  .assess-bar { height: 7px; }
+  .assess-gap { font-size: 15px; }
+
   .keypad-amt { max-width: 380px; }
   .amount-wrap { text-align: left; }
   .chips { max-width: 720px; }
