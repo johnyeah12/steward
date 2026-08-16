@@ -347,8 +347,25 @@ function billStatus(bill, txns, mk, today = todayISO(), lead = leadDays()) {
    custom properties. Read from the shared settings, so choosing a theme on
    one phone reaches the other. */
 
-const themeOf = () => (S.shared && S.shared.theme) || (S.cfg && S.cfg.theme) || 'auto';
-const textOf  = () => (S.shared && S.shared.text)  || (S.cfg && S.cfg.text)  || 'normal';
+/* Appearance is deliberately NOT shared between the phones. Currency and names
+   describe the household and must agree; how large the text needs to be
+   describes a pair of eyes, and one person needing bigger type should never
+   change what the other sees. Stored locally only. */
+/**
+ * Where a phone starts before anyone has chosen.
+ *
+ * Gezelle reads with glasses, so her phone opens at the most legible
+ * combination rather than the default one. It is only a starting point — the
+ * moment either of them picks something in Settings, that choice is stored and
+ * wins from then on.
+ */
+function defaultAppearance() {
+  const hers = S.cfg && S.cfg.me === 'b';
+  return hers ? { theme: 'contrast', text: 'larger' } : { theme: 'auto', text: 'normal' };
+}
+
+const themeOf = () => (S.cfg && S.cfg.theme) || defaultAppearance().theme;
+const textOf  = () => (S.cfg && S.cfg.text)  || defaultAppearance().text;
 
 function applyAppearance() {
   const root = document.documentElement;
@@ -2466,7 +2483,12 @@ function wireEvents() {
   const saveCfg = () => { lsSet(K.cfg, S.cfg); render(); };
   $('#setNameA').addEventListener('change', e => { S.cfg.nameA = e.target.value.trim() || 'Me'; saveCfg(); });
   $('#setNameB').addEventListener('change', e => { S.cfg.nameB = e.target.value.trim() || 'Partner'; saveCfg(); });
-  $('#setMe').addEventListener('change', e => { S.cfg.me = e.target.value; saveCfg(); });
+  $('#setMe').addEventListener('change', e => {
+    S.cfg.me = e.target.value;
+    saveCfg();
+    applyAppearance();      // whose phone this is decides the starting look
+    renderSettings();
+  });
   $('#setBudget').addEventListener('change', e => { S.cfg.budget = parseFloat(e.target.value) || 0; saveCfg(); });
   $('#setLead').addEventListener('change', e => {
     S.cfg.lead = Number(e.target.value) || 3;
@@ -2474,17 +2496,16 @@ function wireEvents() {
     appendEvent({ k: 'cfg', p: { lead: S.cfg.lead } });   // the reminder job reads this
     render(); sync();
   });
+  // saved on this phone only — never pushed to the shared log
   $('#setTheme').addEventListener('change', e => {
     S.cfg.theme = e.target.value;
     lsSet(K.cfg, S.cfg);
-    appendEvent({ k: 'cfg', p: { theme: S.cfg.theme } });
-    applyAppearance(); render(); sync();
+    applyAppearance(); render();
   });
   $('#setText').addEventListener('change', e => {
     S.cfg.text = e.target.value;
     lsSet(K.cfg, S.cfg);
-    appendEvent({ k: 'cfg', p: { text: S.cfg.text } });
-    applyAppearance(); render(); sync();
+    applyAppearance(); render();
   });
   $('#setPropCur').addEventListener('change', e => {
     S.cfg.propCur = e.target.value;
