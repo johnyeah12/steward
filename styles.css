@@ -5,10 +5,12 @@
 :root {
   --bg:        #f2f2f7;
   --bg-elev:   #ffffff;
-  --txt:       #000000;
-  --txt-2:     #6c6c70;
-  --txt-3:     #a1a1a6;
-  --sep:       rgba(60,60,67,.14);
+  /* Every text colour clears WCAG AA (4.5:1) on BOTH surfaces below.
+     The old --txt-3 sat at 2.3:1, which is why it read as disabled. */
+  --txt:       #000000;   /* 21.0:1 */
+  --txt-2:     #55555a;   /*  6.6:1 */
+  --txt-3:     #6e6e75;   /*  4.5:1 */
+  --sep:       rgba(60,60,67,.22);
   --tint:      #6b4ee6;
   --tint-soft: rgba(107,78,230,.12);
   --green:     #2eb872;
@@ -24,10 +26,10 @@
   :root {
     --bg:        #000000;
     --bg-elev:   #1c1c1e;
-    --txt:       #ffffff;
-    --txt-2:     #9e9ea3;
-    --txt-3:     #6b6b70;
-    --sep:       rgba(84,84,88,.5);
+    --txt:       #ffffff;   /* 18.4:1 */
+    --txt-2:     #b6b6bd;   /*  8.4:1 */
+    --txt-3:     #9a9aa2;   /*  6.1:1 */
+    --sep:       rgba(120,120,128,.55);
     --tint:      #a48cff;
     --tint-soft: rgba(164,140,255,.16);
     --green:     #34d17e;
@@ -38,6 +40,12 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+/* Safari holds a tap for ~300ms to see whether it becomes a double-tap-to-zoom.
+   Declaring that we never want that gesture makes every button respond at once. */
+button, .chart-row, .detail-row, .bill-row, .hist-item, .seg button, .chip,
+.cat-pick, .emoji-pick, .tabs button, .due-pay { touch-action: manipulation; }
+.keypad button { user-select: none; -webkit-user-select: none; }
 
 html, body {
   margin: 0; padding: 0;
@@ -133,7 +141,7 @@ button { background: none; border: 0; cursor: pointer; }
   letter-spacing: .5px; color: var(--txt-2); margin-bottom: 12px;
 }
 .danger-head { color: var(--red); }
-.card-note { font-size: 13.5px; color: var(--txt-2); margin: 0 0 14px; line-height: 1.45; }
+.card-note { font-size: 14px; color: var(--txt-2); margin: 0 0 14px; line-height: 1.45; }
 .card-note b { color: var(--txt); font-weight: 600; }
 
 .field {
@@ -264,7 +272,7 @@ button { background: none; border: 0; cursor: pointer; }
   font-size: 13.5px; font-weight: 600; color: var(--txt);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.chart-cap { font-size: 12.5px; color: var(--txt-3); margin: 12px 0 0; line-height: 1.45; }
+.chart-cap { font-size: 13.5px; color: var(--txt-3); margin: 12px 0 0; line-height: 1.45; }
 
 .chart-item.open .chart-row { background: var(--chart-track); }
 .chart-detail {
@@ -275,7 +283,7 @@ button { background: none; border: 0; cursor: pointer; }
   animation: unfold .2s ease;
 }
 @keyframes unfold { from { opacity: 0; transform: translateY(-4px) } }
-.detail-hint { font-size: 12.5px; color: var(--txt-2); margin: 4px 0 8px; line-height: 1.45; }
+.detail-hint { font-size: 13.5px; color: var(--txt-2); margin: 4px 0 8px; line-height: 1.45; }
 .detail-row {
   display: grid; grid-template-columns: 1fr auto auto;
   gap: 10px; align-items: baseline;
@@ -288,9 +296,37 @@ button { background: none; border: 0; cursor: pointer; }
   font-size: 14px; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.detail-date { font-size: 12px; color: var(--txt-3); font-variant-numeric: tabular-nums; }
+.detail-date { font-size: 13px; color: var(--txt-3); font-variant-numeric: tabular-nums; }
 .detail-amt { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.detail-foot { font-size: 12px; color: var(--txt-3); padding-top: 8px; }
+.detail-foot { font-size: 13px; color: var(--txt-3); padding-top: 8px; }
+
+/* ─────────── Uptown ─────────── */
+.split-row { display: flex; gap: 10px; margin-bottom: 14px; }
+.split-row .btn { flex: 1; }
+.hero-amount.pos { color: var(--green); }
+.hero-amount.neg { color: var(--red); }
+
+.ytd-row {
+  display: grid; grid-template-columns: 1fr auto auto auto;
+  gap: 10px; align-items: baseline;
+  padding: 8px 0; border-bottom: .5px solid var(--sep);
+  font-size: 14px; font-variant-numeric: tabular-nums;
+}
+.ytd-row:last-child { border-bottom: 0; }
+.ytd-head {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--txt-2); font-weight: 600;
+}
+.ytd-head span:not(:first-child), .ytd-row span:not(:first-child) {
+  text-align: right; white-space: nowrap;
+}
+.ytd-month { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ytd-in  { color: var(--green); }
+.ytd-out { color: var(--txt-2); }
+.ytd-net { font-weight: 600; }
+.ytd-net.pos { color: var(--green); }
+.ytd-net.neg { color: var(--red); }
+.ytd-total { border-top: 1.5px solid var(--sep); border-bottom: 0; font-weight: 600; padding-top: 10px; }
 
 /* ─────────── Category picker ─────────── */
 .cat-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
@@ -377,7 +413,7 @@ button { background: none; border: 0; cursor: pointer; }
 .bill-row:last-child { border-bottom: 0; }
 .bill-row:active { background: var(--tint-soft); }
 .bill-name { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bill-when { display: block; font-size: 13px; color: var(--txt-2); margin-top: 3px; }
+.bill-when { display: block; font-size: 13.5px; color: var(--txt-2); margin-top: 3px; }
 .bill-right { text-align: right; white-space: nowrap; }
 .bill-amt { display: block; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
@@ -399,7 +435,7 @@ button { background: none; border: 0; cursor: pointer; }
 .due-row:first-child { padding-top: 0; }
 .due-row > span:first-child { min-width: 0; }
 .due-name { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
-.due-meta { font-size: 13px; color: var(--txt-2); }
+.due-meta { font-size: 13.5px; color: var(--txt-2); }
 .due-pay {
   font-size: 13px; font-weight: 600; color: var(--tint);
   background: var(--tint-soft); border-radius: 99px; padding: 5px 12px; white-space: nowrap;
@@ -426,7 +462,7 @@ button { background: none; border: 0; cursor: pointer; }
 .row-bad td { color: var(--red); }
 .row-muted td { opacity: .42; }
 .bad-note { color: var(--red); }
-.prev-grp { font-size: 11px; color: var(--txt-3); text-transform: uppercase; letter-spacing: .3px; }
+.prev-grp { font-size: 12px; color: var(--txt-3); text-transform: uppercase; letter-spacing: .3px; }
 .preview-total {
   display: flex; justify-content: space-between; gap: 10px;
   font-size: 14px; padding: 9px 0 0; margin-top: 4px;
@@ -478,7 +514,7 @@ button { background: none; border: 0; cursor: pointer; }
 }
 @keyframes spin { to { transform: rotate(360deg) } }
 .scan-msg { font-size: 16px; font-weight: 500; margin-bottom: 14px; }
-.scan-hint { font-size: 12.5px; color: var(--txt-3); margin: 12px 0 16px; line-height: 1.45; }
+.scan-hint { font-size: 13.5px; color: var(--txt-3); margin: 12px 0 16px; line-height: 1.45; }
 
 .receipt-view {
   width: 100%; border-radius: 12px; display: block;
@@ -507,7 +543,7 @@ button { background: none; border: 0; cursor: pointer; }
 .hist-emoji { font-size: 21px; text-align: center; }
 .hist-mid { min-width: 0; display: block; }
 .hist-note { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hist-meta { display: block; font-size: 13px; color: var(--txt-2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hist-meta { display: block; font-size: 13.5px; color: var(--txt-2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hist-amt { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* ─────────── Tab bar ─────────── */
@@ -532,6 +568,74 @@ button { background: none; border: 0; cursor: pointer; }
 .tabs button.on .ti { filter: none; }
 .tabs button.on { color: var(--tint); }
 .tab-add .ti { font-weight: 600; }
+
+/* ═══════════ Desktop ═══════════
+   Above 820px the bottom tab bar becomes a left rail and the content gets a
+   comfortable measure instead of stretching across the whole window. Same
+   markup throughout — only the frame changes. */
+@media (min-width: 820px) {
+  .tabs {
+    top: 0; bottom: 0; right: auto;
+    width: 216px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    padding: calc(20px + var(--safe-t)) 12px 20px;
+    border-top: 0;
+    border-right: .5px solid var(--sep);
+  }
+  .tabs::before {
+    content: '🌾 Steward';
+    display: block;
+    font-size: 17px; font-weight: 700; letter-spacing: -.2px;
+    color: var(--txt); padding: 0 12px 20px;
+  }
+  .tabs button {
+    flex: 0 0 auto;
+    flex-direction: row; justify-content: flex-start; gap: 12px;
+    padding: 11px 12px; border-radius: 10px;
+    font-size: 15px;
+  }
+  .tabs button .ti { font-size: 18px; width: 22px; text-align: center; }
+  .tabs button.on { background: var(--tint-soft); }
+
+  .view { left: 216px; }
+  .hdr { padding-left: 32px; padding-right: 32px; }
+  .hdr-row { max-width: 1080px; margin: 0 auto; }
+  .search  { max-width: 1080px; margin-left: auto; margin-right: auto; }
+  .sync-pill { margin-top: 10px; }
+
+  .scroll { padding: 24px 32px; }
+  .scroll > * { max-width: 1080px; margin-left: auto; margin-right: auto; }
+  .pad-bottom { height: 32px; }
+
+  /* two columns where the cards are independent of one another */
+  #v-home .scroll, #v-bills .scroll { padding-bottom: 40px; }
+  .hero-amount { font-size: 54px; }
+  .card { padding: 20px; }
+
+  /* the sheet stops being a phone drawer and becomes a centred dialog */
+  .sheet-backdrop { align-items: center; justify-content: center; padding: 32px; }
+  .sheet {
+    max-width: 560px; border-radius: 20px;
+    max-height: 84vh; padding: 20px 24px 24px;
+    animation: pop .18s cubic-bezier(.32,.72,0,1);
+  }
+  @keyframes pop { from { transform: scale(.96); opacity: 0 } }
+  .sheet-grab { display: none; }
+
+  .keypad-amt { max-width: 380px; }
+  .amount-wrap { text-align: left; }
+  .chips { max-width: 720px; }
+  .toast { bottom: 32px; left: auto; right: 32px; transform: translate(0, 20px); }
+  .toast.on { transform: translate(0, 0); }
+}
+
+@media (min-width: 1180px) {
+  /* Home reads better as two columns once there is room for it */
+  #v-home .scroll > .card, #v-home .scroll > .hero { max-width: 1080px; }
+  #v-home .scroll { column-gap: 20px; }
+}
 
 /* ─────────── Sheet ─────────── */
 .sheet-backdrop {

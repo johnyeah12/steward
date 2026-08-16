@@ -215,6 +215,46 @@
     </div>
   </section>
 
+  <!-- ─── UPTOWN (Airbnb) ─── -->
+  <section id="v-uptown" class="view hidden">
+    <header class="hdr">
+      <div class="hdr-row">
+        <button id="upPrev" class="chev" aria-label="Previous month">‹</button>
+        <h2 id="upMonth" class="hdr-title">Uptown</h2>
+        <button id="upNext" class="chev" aria-label="Next month">›</button>
+      </div>
+    </header>
+    <div class="scroll">
+      <div class="hero hero-sm">
+        <div class="hero-label">Net this month</div>
+        <div id="upNet" class="hero-amount hero-amount-sm">—</div>
+        <div id="upNetNote" class="hero-delta"></div>
+      </div>
+
+      <div class="split-row">
+        <button id="upAddIn" class="btn btn-primary">＋ Earning</button>
+        <button id="upAddOut" class="btn btn-secondary">＋ Expense</button>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Earnings</div>
+        <div id="upIn"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Expenses</div>
+        <div id="upOut"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Year to date</div>
+        <div id="upYear"></div>
+      </div>
+
+      <div class="pad-bottom"></div>
+    </div>
+  </section>
+
   <!-- ─── SETTINGS ─── -->
   <section id="v-set" class="view hidden">
     <header class="hdr"><div class="hdr-row"><span class="hdr-btn hdr-ghost"></span><h2 class="hdr-title">Settings</h2><span class="hdr-btn hdr-ghost"></span></div></header>
@@ -262,6 +302,7 @@
     <button data-v="home" class="on"><span class="ti">◎</span><span>Home</span></button>
     <button data-v="add" class="tab-add"><span class="ti">＋</span><span>Add</span></button>
     <button data-v="bills"><span class="ti">🧾</span><span>Bills</span></button>
+    <button data-v="uptown"><span class="ti">🏘️</span><span>Uptown</span></button>
     <button data-v="hist"><span class="ti">≡</span><span>History</span></button>
     <button data-v="set"><span class="ti">⚙</span><span>Settings</span></button>
   </nav>

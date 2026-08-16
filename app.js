@@ -202,6 +202,11 @@ const money = cents => {
   const n = (ZERO_DP.has(S.cfg?.cur) ? cents : cents / 100);
   return (SYMBOL[S.cfg?.cur] || '') + n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
 };
+/** Whole-unit money for dense tables, where two decimals per cell overflow. */
+const moneyShort = cents => {
+  const n = ZERO_DP.has(S.cfg?.cur) ? cents : Math.round(cents / 100);
+  return (SYMBOL[S.cfg?.cur] || '') + n.toLocaleString();
+};
 const nameOf = who => (who === 'a' ? S.cfg.nameA : S.cfg.nameB);
 const iAm     = () => S.cfg.me;
 const theOther = () => (S.cfg.me === 'a' ? 'b' : 'a');
@@ -483,7 +488,22 @@ function parseBillRow(cells, idx, group) {
     return { name, amount, day, cc, grp: group || null, ok: issues.length === 0, issues };
 }
 
+/** Money coming in — Airbnb payouts and the like. Never counted as spending. */
+const isIncome = t => t.kind === 'in';
+const isSpend  = t => !isIncome(t);
+
+/**
+ * Anything belonging to the Uptown flat.
+ *
+ * Matching a bare "uptown" is wrong — Uptown BGC is a district full of shops,
+ * so it swept up restaurant bills. Only the property's own costs are recognised
+ * automatically; anything else is tagged by hand from the entry's edit sheet.
+ */
+const UPTOWN_AUTO = /uptown\s*(arts|pldt)|meralco\s*uptown|uptown.*(assoc|home\s*loan|dues)/i;
+const isUptown = t => t.prop === 'uptown' || (t.prop !== 'no' && UPTOWN_AUTO.test(t.note || ''));
+
 const inMonth = (txns, mk) => txns.filter(t => monthKey(t.date) === mk);
+const spendIn = (txns, mk) => inMonth(txns, mk).filter(isSpend);
 
 /* ───────────────────────── GitHub sync ───────────────────────── */
 
@@ -644,20 +664,21 @@ function render() {
   renderHome();
   renderDueCard();
   renderBills();
+  renderUptown();
   renderHistory();
   renderSettings();
 }
 
 function renderHome() {
   const { txns } = reduceLog();
-  const mt = inMonth(txns, S.month);
+  const mt = spendIn(txns, S.month);          // income is not spending
   const total = mt.reduce((s, t) => s + t.amt, 0);
 
   $('#monthLabel').textContent = monthName(S.month);
   $('#heroAmount').textContent = money(total);
 
   // month-over-month
-  const prev = inMonth(txns, shiftMonth(S.month, -1)).reduce((s, t) => s + t.amt, 0);
+  const prev = spendIn(txns, shiftMonth(S.month, -1)).reduce((s, t) => s + t.amt, 0);
   const dEl = $('#heroDelta');
   if (prev > 0) {
     const pct = Math.round(((total - prev) / prev) * 100);
@@ -797,6 +818,111 @@ function renderCatDetail(k, txns) {
       </div>`).join('')}
     <div class="detail-foot">${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} · tap one to change its category</div>
   </div>`;
+}
+
+/**
+ * The Uptown flat, kept apart from household spending because it is a small
+ * business: what it earned, what it cost, and whether it actually made money.
+ */
+function renderUptown() {
+  const { txns } = reduceLog();
+  const mk = S.upMonth || monthKey(todayISO());
+  const mine = txns.filter(isUptown);
+  const month = mine.filter(t => monthKey(t.date) === mk);
+  const earned = month.filter(isIncome).reduce((s, t) => s + t.amt, 0);
+  const spent  = month.filter(isSpend).reduce((s, t) => s + t.amt, 0);
+  const net = earned - spent;
+
+  $('#upMonth').textContent = `Uptown · ${monthName(mk)}`;
+  $('#upNet').textContent = money(Math.abs(net));
+  $('#upNet').className = 'hero-amount hero-amount-sm ' + (net >= 0 ? 'pos' : 'neg');
+  $('#upNetNote').textContent = !month.length
+    ? 'Nothing recorded for this month yet'
+    : `${money(earned)} in · ${money(spent)} out · ${net >= 0 ? 'ahead' : 'behind'}`;
+  $('#upNetNote').className = 'hero-delta ' + (net >= 0 ? 'down' : 'up');
+
+  const list = (rows, empty) => rows.length
+    ? rows.sort((a, b) => b.amt - a.amt || (a.date < b.date ? 1 : -1)).map(t => `
+        <div class="detail-row" role="button" tabindex="0" data-txn="${t.id}">
+          <span class="detail-name">${escapeHtml(t.note || catOf(t.cat).n)}</span>
+          <span class="detail-date">${t.date.slice(5).replace('-', '/')}</span>
+          <span class="detail-amt">${money(t.amt)}</span>
+        </div>`).join('')
+    : `<div class="empty">${empty}</div>`;
+
+  $('#upIn').innerHTML  = list(month.filter(isIncome), 'No earnings logged for this month');
+  $('#upOut').innerHTML = list(month.filter(isSpend),  'No costs logged for this month');
+
+  // year to date, month by month
+  const year = mk.slice(0, 4);
+  const months = [...new Set(mine.filter(t => t.date.startsWith(year)).map(t => monthKey(t.date)))].sort();
+  if (!months.length) {
+    $('#upYear').innerHTML = `<div class="empty">Nothing yet for ${year}</div>`;
+    return;
+  }
+  let ytdIn = 0, ytdOut = 0;
+  const rows = months.map(m => {
+    const inM  = mine.filter(t => monthKey(t.date) === m && isIncome(t)).reduce((s, t) => s + t.amt, 0);
+    const outM = mine.filter(t => monthKey(t.date) === m && isSpend(t)).reduce((s, t) => s + t.amt, 0);
+    ytdIn += inM; ytdOut += outM;
+    const n = inM - outM;
+    return `<div class="ytd-row">
+      <span class="ytd-month">${escapeHtml(monthName(m).slice(0, 3))}</span>
+      <span class="ytd-in">${inM ? '+' + moneyShort(inM) : '—'}</span>
+      <span class="ytd-out">${outM ? '−' + moneyShort(outM) : '—'}</span>
+      <span class="ytd-net ${n >= 0 ? 'pos' : 'neg'}">${n >= 0 ? '' : '−'}${moneyShort(Math.abs(n))}</span>
+    </div>`;
+  }).join('');
+  const ytdNet = ytdIn - ytdOut;
+  $('#upYear').innerHTML = `
+    <div class="ytd-row ytd-head"><span>Month</span><span>In</span><span>Out</span><span>Net</span></div>
+    ${rows}
+    <div class="ytd-row ytd-total">
+      <span>${year}</span>
+      <span class="ytd-in">${ytdIn ? '+' + moneyShort(ytdIn) : '—'}</span>
+      <span class="ytd-out">${ytdOut ? '−' + moneyShort(ytdOut) : '—'}</span>
+      <span class="ytd-net ${ytdNet >= 0 ? 'pos' : 'neg'}">${ytdNet >= 0 ? '' : '−'}${moneyShort(Math.abs(ytdNet))}</span>
+    </div>`;
+}
+
+/** Log an Uptown earning or cost. */
+function openUptownSheet(kind) {
+  const income = kind === 'in';
+  $('#sheetBody').innerHTML = `
+    <h3 class="sheet-title">${income ? 'Uptown earning' : 'Uptown cost'}</h3>
+    <p class="sheet-sub">${income ? 'An Airbnb payout or other rent received.' : 'Something the flat cost you.'}</p>
+    <div class="card">
+      <label class="field"><span>Amount (${S.cfg.cur})</span><input id="upAmt" type="number" inputmode="decimal" step="any" placeholder="0"></label>
+      <label class="field"><span>What for</span><input id="upNote" type="text" placeholder="${income ? 'e.g. Airbnb payout' : 'e.g. Cleaning'}" autocapitalize="sentences"></label>
+      <label class="field"><span>Date</span><input id="upDate" type="date" value="${todayISO()}"></label>
+      ${income ? '' : `<label class="field"><span>Category</span><select id="upCat">${allCats().map(c => `<option value="${c.k}"${c.k === 'home' ? ' selected' : ''}>${c.e} ${escapeHtml(c.n)}</option>`).join('')}</select></label>`}
+    </div>
+    <button id="upSave" class="btn btn-primary">Save</button>
+    <div style="height:10px"></div>
+    <button id="upClose" class="btn btn-secondary">Cancel</button>`;
+
+  $('#sheet').classList.remove('hidden');
+  $('#upClose').onclick = closeSheet;
+  setTimeout(() => $('#upAmt').focus(), 150);
+
+  $('#upSave').onclick = () => {
+    const v = parseFloat($('#upAmt').value);
+    if (!v || v <= 0) { toast('Enter an amount'); return; }
+    const unit = ZERO_DP.has(S.cfg.cur) ? 1 : 100;
+    appendEvent({
+      k: 'add',
+      x: {
+        id: uid(), amt: Math.round(v * unit),
+        cat: income ? 'misc' : $('#upCat').value,
+        note: $('#upNote').value.trim() || (income ? 'Airbnb payout' : 'Uptown cost'),
+        date: $('#upDate').value || todayISO(),
+        payer: iAm(), prop: 'uptown', ...(income ? { kind: 'in' } : {}),
+      },
+    });
+    closeSheet();
+    toast(income ? 'Earning logged' : 'Cost logged');
+    haptic(); render(); sync();
+  };
 }
 
 function renderBills() {
@@ -1088,6 +1214,10 @@ function openSheet(id) {
       <label class="field"><span>Date</span><input id="edDate" type="date" value="${t.date}"></label>
       <label class="field"><span>Category</span><select id="edCat">${allCats().map(c => `<option value="${c.k}"${c.k === t.cat ? ' selected' : ''}>${c.e} ${escapeHtml(c.n)}</option>`).join('')}</select></label>
       <label class="field"><span>Paid by</span><select id="edPayer"><option value="a"${t.payer === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)}</option><option value="b"${t.payer === 'b' ? ' selected' : ''}>${escapeHtml(S.cfg.nameB)}</option></select></label>
+      <label class="field"><span>Belongs to</span><select id="edProp">
+        <option value=""${!isUptown(t) ? ' selected' : ''}>Household</option>
+        <option value="uptown"${isUptown(t) ? ' selected' : ''}>🏘️ Uptown flat</option>
+      </select></label>
     </div>
     <button id="edSave" class="btn btn-primary">Save changes</button>
     <div style="height:10px"></div>
@@ -1125,6 +1255,8 @@ function openSheet(id) {
         date: $('#edDate').value || t.date,
         cat: $('#edCat').value,
         payer: $('#edPayer').value,
+        // 'no' explicitly opts out, so an auto-matched entry can be removed
+        prop: $('#edProp').value === 'uptown' ? 'uptown' : 'no',
 
       },
     });
@@ -1580,11 +1712,12 @@ async function exportCsv() {
 
 function go(view) {
   S.view = view;
-  for (const v of ['home', 'add', 'bills', 'hist', 'set']) $('#v-' + v).classList.toggle('hidden', v !== view);
+  for (const v of ['home', 'add', 'bills', 'uptown', 'hist', 'set']) $('#v-' + v).classList.toggle('hidden', v !== view);
   $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
   if (view === 'add') paintAdd();
   if (view === 'hist') renderHistory();
   if (view === 'bills') renderBills();
+  if (view === 'uptown') renderUptown();
 }
 
 /* ───────────────────────── Lock screen ───────────────────────── */
@@ -1604,6 +1737,9 @@ async function pinPress(k) {
   const pin = pinBuf;
   $('#lockMsg').textContent = 'Unlocking…';
   $('#lockMsg').classList.remove('err');
+  // let the sixth dot and the message paint before the key derivation starts,
+  // so the last tap never looks like it was dropped
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
   try {
     S.secret = await openVault(pin);
     pinBuf = ''; paintPin();
@@ -1669,11 +1805,30 @@ async function boot() {
 
 /* ───────────────────────── Wiring ───────────────────────── */
 
+/**
+ * Act on pointerdown so a tap registers the instant a finger lands, instead of
+ * waiting for the click Safari delays while it rules out a double-tap. A real
+ * click still arrives afterwards; it is ignored unless nothing handled the
+ * press, which keeps keyboards and assistive tech working.
+ */
+function onTap(el, selector, fn) {
+  let handledAt = 0;
+  el.addEventListener('pointerdown', e => {
+    const b = e.target.closest(selector);
+    if (!b) return;
+    handledAt = Date.now();
+    fn(b, e);
+  });
+  el.addEventListener('click', e => {
+    const b = e.target.closest(selector);
+    if (!b || Date.now() - handledAt < 700) return;
+    fn(b, e);
+  });
+}
+
 function wireEvents() {
   // lock keypad
-  $('#lockPad').addEventListener('click', e => {
-    const b = e.target.closest('button[data-k]'); if (b) pinPress(b.dataset.k);
-  });
+  onTap($('#lockPad'), 'button[data-k]', b => pinPress(b.dataset.k));
 
   // setup
   $('#suTest').addEventListener('click', testConnection);
@@ -1715,9 +1870,7 @@ function wireEvents() {
   });
 
   // add view
-  $('#addPad').addEventListener('click', e => {
-    const b = e.target.closest('button[data-k]'); if (b) pressAmount(b.dataset.k);
-  });
+  onTap($('#addPad'), 'button[data-k]', b => pressAmount(b.dataset.k));
   $('#addCats').addEventListener('click', e => {
     const b = e.target.closest('[data-cat]'); if (!b) return;
     S.draft.cat = b.dataset.cat; paintAdd(); haptic();
@@ -1736,6 +1889,19 @@ function wireEvents() {
   $('#scanInput').addEventListener('change', e => onScanFile(e.target.files && e.target.files[0]));
   $('#scanCancel').addEventListener('click', () => { scanAborted = true; hideScan(); });
 
+
+  // uptown
+  $('#upAddIn').addEventListener('click', () => openUptownSheet('in'));
+  $('#upAddOut').addEventListener('click', () => openUptownSheet('out'));
+  $('#upPrev').addEventListener('click', () => {
+    S.upMonth = shiftMonth(S.upMonth || monthKey(todayISO()), -1); renderUptown();
+  });
+  $('#upNext').addEventListener('click', () => {
+    S.upMonth = shiftMonth(S.upMonth || monthKey(todayISO()), 1); renderUptown();
+  });
+  $('#v-uptown').addEventListener('click', e => {
+    const b = e.target.closest('[data-txn]'); if (b) openSheet(b.dataset.txn);
+  });
 
   // bills
   $('#billAdd').addEventListener('click', () => openBillSheet(null));
