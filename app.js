@@ -202,6 +202,16 @@ const money = cents => {
   const n = (ZERO_DP.has(S.cfg?.cur) ? cents : cents / 100);
   return (SYMBOL[S.cfg?.cur] || '') + n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
 };
+/** Format an amount in a currency that isn't the app's own. */
+const moneyIn = (minor, cur) =>
+  (SYMBOL[cur] || (cur + ' ')) +
+  (ZERO_DP.has(cur) ? minor : minor / 100).toLocaleString(undefined,
+    { minimumFractionDigits: ZERO_DP.has(cur) ? 0 : 2, maximumFractionDigits: ZERO_DP.has(cur) ? 0 : 2 });
+
+/** An entry earned in another currency keeps the original alongside the
+    converted figure, so the source of truth is never lost to a rate. */
+const srcOf = t => (t.src && t.src.cur && t.src.amt != null ? t.src : null);
+
 /** Whole-unit money for dense tables, where two decimals per cell overflow. */
 const moneyShort = cents => {
   const n = ZERO_DP.has(S.cfg?.cur) ? cents : Math.round(cents / 100);
@@ -841,13 +851,21 @@ function renderUptown() {
     : `${money(earned)} in · ${money(spent)} out · ${net >= 0 ? 'ahead' : 'behind'}`;
   $('#upNetNote').className = 'hero-delta ' + (net >= 0 ? 'down' : 'up');
 
+  // when entries were earned in another currency, show that alongside ours
+  const anySrc = month.some(srcOf);
   const list = (rows, empty) => rows.length
-    ? rows.sort((a, b) => b.amt - a.amt || (a.date < b.date ? 1 : -1)).map(t => `
-        <div class="detail-row" role="button" tabindex="0" data-txn="${t.id}">
+    ? (anySrc ? `<div class="detail-row detail-head">
+          <span>What</span><span>When</span><span>Earned</span><span>In ${escapeHtml(S.cfg.cur)}</span>
+        </div>` : '') +
+      rows.sort((a, b) => b.amt - a.amt || (a.date < b.date ? 1 : -1)).map(t => {
+        const s = srcOf(t);
+        return `<div class="detail-row${anySrc ? ' has-src' : ''}" role="button" tabindex="0" data-txn="${t.id}">
           <span class="detail-name">${escapeHtml(t.note || catOf(t.cat).n)}</span>
           <span class="detail-date">${t.date.slice(5).replace('-', '/')}</span>
+          ${anySrc ? `<span class="detail-src">${s ? moneyIn(s.amt, s.cur) : '—'}</span>` : ''}
           <span class="detail-amt">${money(t.amt)}</span>
-        </div>`).join('')
+        </div>`;
+      }).join('')
     : `<div class="empty">${empty}</div>`;
 
   $('#upIn').innerHTML  = list(month.filter(isIncome), 'No earnings logged for this month');
@@ -886,6 +904,15 @@ function renderUptown() {
 }
 
 /* ── importing an Airbnb export ── */
+
+/**
+ * A starting point for a conversion, not an authority — there is no network
+ * rate here and one baked into an app goes stale. The preview says plainly
+ * that it must be checked, and the original amount is stored regardless.
+ */
+const ROUGH_RATES = { 'PHP>HKD': 0.134, 'HKD>PHP': 7.46, 'USD>HKD': 7.8, 'HKD>USD': 0.128,
+                      'PHP>USD': 0.0172, 'USD>PHP': 58.2, 'EUR>HKD': 8.4, 'GBP>HKD': 9.9 };
+const guessRate = (from, to) => ROUGH_RATES[`${String(from).toUpperCase()}>${String(to).toUpperCase()}`] || 1;
 
 function openAirbnbSheet() {
   $('#sheetBody').innerHTML = `
@@ -950,8 +977,9 @@ async function onAirbnbFile(file) {
     ${mismatch ? `<div class="card warn-card">
       <div class="card-head">Different currency</div>
       <p class="card-note">This export is in <b>${escapeHtml(cur)}</b> but Steward is set to <b>${escapeHtml(S.cfg.cur)}</b>.
-      Set a rate to convert, or leave it at 1 to import the numbers unchanged.</p>
-      <label class="field"><span>1 ${escapeHtml(cur)} =</span><input id="abnbRate" type="number" inputmode="decimal" step="any" value="1"> </label>
+      The rate below is only a starting point — <b>check today's rate and correct it</b>.
+      What was earned in ${escapeHtml(cur)} is kept either way, so a wrong rate can be fixed later.</p>
+      <label class="field"><span>1 ${escapeHtml(cur)} =</span><input id="abnbRate" type="number" inputmode="decimal" step="any" value="${guessRate(cur, S.cfg.cur)}"> </label>
     </div>` : ''}
     <div class="card">
       <div class="card-head">${usable.length} booking${usable.length === 1 ? '' : 's'} to import</div>
@@ -983,10 +1011,12 @@ async function onAirbnbFile(file) {
   $('#abnbInput').value = '';
 
   const rate = () => (mismatch ? (parseFloat($('#abnbRate').value) || 1) : 1);
+  const paintTotal = () => {
+    $('#abnbTotal').textContent = money(Math.round(gross * rate() * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)));
+  };
   if (mismatch) {
-    $('#abnbRate').addEventListener('input', () => {
-      $('#abnbTotal').textContent = money(Math.round(gross * rate() * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)));
-    });
+    $('#abnbRate').addEventListener('input', paintTotal);
+    paintTotal();          // the prefilled rate must apply before anyone types
   }
 
   $('#abnbGo').onclick = () => {
@@ -999,6 +1029,8 @@ async function onAirbnbFile(file) {
           id: uid(), amt: Math.round(r.amount * r8 * unit), cat: 'misc',
           note: r.note.slice(0, 60), date: r.date, payer: iAm(),
           prop: 'uptown', kind: 'in', abnb: r.code || undefined,
+          // keep what was actually earned, so a wrong rate is fixable later
+          ...(mismatch ? { src: { cur, amt: Math.round(r.amount * (ZERO_DP.has(cur) ? 1 : 100)) }, rate: r8 } : {}),
         },
       });
     }
@@ -1326,17 +1358,26 @@ function openSheet(id) {
   const t = txns.find(x => x.id === id);
   if (!t) return;
   const dp = ZERO_DP.has(S.cfg.cur) ? 0 : 2;
+  const income = isIncome(t);
+  const src = srcOf(t);
+  const sdp = src && ZERO_DP.has(src.cur) ? 0 : 2;
+  const thing = income ? 'earning' : 'expense';
 
   $('#sheetBody').innerHTML = `
-    <h3 class="sheet-title">Edit expense</h3>
-    <p class="sheet-sub">${dayName(t.date)}</p>
+    <h3 class="sheet-title">Edit ${thing}</h3>
+    <p class="sheet-sub">${dayName(t.date)}${income && isUptown(t) ? ' · Uptown' : ''}</p>
     ${t.rcpt ? '<div id="edReceipt"></div>' : ''}
     <div class="card">
-      <label class="field"><span>Amount</span><input id="edAmt" type="number" inputmode="decimal" step="any" value="${(ZERO_DP.has(S.cfg.cur) ? t.amt : t.amt / 100).toFixed(dp)}"></label>
-      <label class="field"><span>Note</span><input id="edNote" type="text" value="${escapeHtml(t.note || '')}" placeholder="Optional"></label>
+      ${src ? `
+      <label class="field"><span>Amount (${escapeHtml(src.cur)})</span><input id="edSrcAmt" type="number" inputmode="decimal" step="any" value="${(ZERO_DP.has(src.cur) ? src.amt : src.amt / 100).toFixed(sdp)}"></label>
+      <label class="field"><span>1 ${escapeHtml(src.cur)} = ${escapeHtml(S.cfg.cur)}</span><input id="edRate" type="number" inputmode="decimal" step="any" value="${t.rate || 1}"></label>
+      <div class="field"><span>Works out to</span><span id="edConv" class="conv-out">${money(t.amt)}</span></div>
+      ` : `
+      <label class="field"><span>Amount</span><input id="edAmt" type="number" inputmode="decimal" step="any" value="${(ZERO_DP.has(S.cfg.cur) ? t.amt : t.amt / 100).toFixed(dp)}"></label>`}
+      <label class="field"><span>${income ? 'What for' : 'Note'}</span><input id="edNote" type="text" value="${escapeHtml(t.note || '')}" placeholder="Optional"></label>
       <label class="field"><span>Date</span><input id="edDate" type="date" value="${t.date}"></label>
-      <label class="field"><span>Category</span><select id="edCat">${allCats().map(c => `<option value="${c.k}"${c.k === t.cat ? ' selected' : ''}>${c.e} ${escapeHtml(c.n)}</option>`).join('')}</select></label>
-      <label class="field"><span>Paid by</span><select id="edPayer"><option value="a"${t.payer === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)}</option><option value="b"${t.payer === 'b' ? ' selected' : ''}>${escapeHtml(S.cfg.nameB)}</option></select></label>
+      ${income ? '' : `<label class="field"><span>Category</span><select id="edCat">${allCats().map(c => `<option value="${c.k}"${c.k === t.cat ? ' selected' : ''}>${c.e} ${escapeHtml(c.n)}</option>`).join('')}</select></label>`}
+      <label class="field"><span>${income ? 'Received by' : 'Paid by'}</span><select id="edPayer"><option value="a"${t.payer === 'a' ? ' selected' : ''}>${escapeHtml(S.cfg.nameA)}</option><option value="b"${t.payer === 'b' ? ' selected' : ''}>${escapeHtml(S.cfg.nameB)}</option></select></label>
       <label class="field"><span>Belongs to</span><select id="edProp">
         <option value=""${!isUptown(t) ? ' selected' : ''}>Household</option>
         <option value="uptown"${isUptown(t) ? ' selected' : ''}>🏘️ Uptown flat</option>
@@ -1344,7 +1385,7 @@ function openSheet(id) {
     </div>
     <button id="edSave" class="btn btn-primary">Save changes</button>
     <div style="height:10px"></div>
-    <button id="edDel" class="btn btn-danger">Delete expense</button>
+    <button id="edDel" class="btn btn-danger">Delete ${thing}</button>
     <div style="height:10px"></div>
     <button id="edClose" class="btn btn-secondary">Cancel</button>`;
 
@@ -1367,22 +1408,44 @@ function openSheet(id) {
     if (t.rcpt) deleteReceipt(id);
     closeSheet(); toast('Deleted'); render(); sync();
   };
-  $('#edSave').onclick = () => {
-    const v = parseFloat($('#edAmt').value);
-    if (!v || v <= 0) { toast('Enter a valid amount'); return; }
-    appendEvent({
-      k: 'edit', x: id,
-      p: {
-        amt: Math.round(v * (ZERO_DP.has(S.cfg.cur) ? 1 : 100)),
-        note: $('#edNote').value.trim(),
-        date: $('#edDate').value || t.date,
-        cat: $('#edCat').value,
-        payer: $('#edPayer').value,
-        // 'no' explicitly opts out, so an auto-matched entry can be removed
-        prop: $('#edProp').value === 'uptown' ? 'uptown' : 'no',
+  // live preview of the converted figure while the amount or rate is edited
+  const recalc = () => {
+    if (!src) return null;
+    const sv = parseFloat($('#edSrcAmt').value);
+    const rt = parseFloat($('#edRate').value);
+    if (!sv || sv <= 0 || !rt || rt <= 0) return null;
+    const conv = Math.round(sv * rt * (ZERO_DP.has(S.cfg.cur) ? 1 : 100));
+    $('#edConv').textContent = money(conv);
+    return { conv, srcMinor: Math.round(sv * (ZERO_DP.has(src.cur) ? 1 : 100)), rate: rt };
+  };
+  if (src) {
+    $('#edSrcAmt').addEventListener('input', recalc);
+    $('#edRate').addEventListener('input', recalc);
+  }
 
-      },
-    });
+  $('#edSave').onclick = () => {
+    const p = {
+      note: $('#edNote').value.trim(),
+      date: $('#edDate').value || t.date,
+      payer: $('#edPayer').value,
+      // 'no' explicitly opts out, so an auto-matched entry can be removed
+      prop: $('#edProp').value === 'uptown' ? 'uptown' : 'no',
+    };
+    if (!income) p.cat = $('#edCat').value;
+
+    if (src) {
+      const r = recalc();
+      if (!r) { toast('Enter a valid amount and rate'); return; }
+      p.amt = r.conv;
+      p.src = { cur: src.cur, amt: r.srcMinor };
+      p.rate = r.rate;
+    } else {
+      const v = parseFloat($('#edAmt').value);
+      if (!v || v <= 0) { toast('Enter a valid amount'); return; }
+      p.amt = Math.round(v * (ZERO_DP.has(S.cfg.cur) ? 1 : 100));
+    }
+
+    appendEvent({ k: 'edit', x: id, p });
     closeSheet(); toast('Updated'); render(); sync();
   };
 }

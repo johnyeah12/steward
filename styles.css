@@ -297,6 +297,15 @@ button { background: none; border: 0; cursor: pointer; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .detail-date { font-size: 13px; color: var(--txt-3); font-variant-numeric: tabular-nums; }
+.detail-row.has-src { grid-template-columns: 1fr auto auto auto; }
+.detail-src { font-size: 13.5px; color: var(--txt-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.detail-head {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--txt-2); font-weight: 600;
+  grid-template-columns: 1fr auto auto auto;
+}
+.detail-head span:not(:first-child) { text-align: right; }
+.conv-out { flex: 1; text-align: right; font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .detail-amt { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .detail-foot { font-size: 13px; color: var(--txt-3); padding-top: 8px; }
 
