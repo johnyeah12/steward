@@ -320,7 +320,12 @@ function reduceLog() {
 /* ───────────────────────── Bills ───────────────────────── */
 
 const daysInMonth = mk => { const [y, m] = mk.split('-').map(Number); return new Date(y, m, 0).getDate(); };
-const billDueISO = (bill, mk) => `${mk}-${String(Math.min(bill.day, daysInMonth(mk))).padStart(2, '0')}`;
+/** An undated monthly allocation still needs a real date when it is paid —
+    without this it produced day "00", which is not a date at all. */
+const billDueISO = (bill, mk) => {
+  const day = bill.day ? Math.min(bill.day, daysInMonth(mk)) : 1;
+  return `${mk}-${String(day).padStart(2, '0')}`;
+};
 const daysBetween = (from, to) =>
   Math.round((Date.parse(to + 'T00:00:00') - Date.parse(from + 'T00:00:00')) / 864e5);
 
@@ -1262,6 +1267,7 @@ function renderBills() {
   const total = bills.reduce((s, b) => s + b.amt, 0);
   const onCard = bills.reduce((s, b) => s + (b.cc || 0), 0);
   $('#billTotal').textContent = bills.length ? money(total) : '—';
+  $('#billMonth').textContent = monthName(mk);
 
   const states = bills.map(b => billStatus(b, txns, mk));
   const unpaidCount = states.filter(s => s.state !== 'paid').length;
@@ -1335,21 +1341,33 @@ function renderDueCard() {
     </div>`).join('');
 }
 
-function markBillPaid(billId) {
-  const { bills } = reduceLog();
+/**
+ * Mark a bill paid for a given month.
+ *
+ * The month must be passed in: this used to assume today, so paying a bill
+ * while looking at an earlier month silently recorded it against the current
+ * one — the label said May and the payment landed in August.
+ */
+function markBillPaid(billId, mk = S.month) {
+  const { bills, txns } = reduceLog();
   const b = bills.find(x => x.id === billId);
   if (!b) return;
-  const mk = monthKey(todayISO());
+  if (txns.some(t => t.bill === b.id && monthKey(t.date) === mk)) {
+    toast(`${b.name} is already paid for ${monthName(mk)}`);
+    return;
+  }
   // dated to the due day so it always lands in the month it belongs to
   appendEvent({
     k: 'add',
     x: {
       id: uid(), amt: b.amt, cat: b.cat, note: b.name,
       date: billDueISO(b, mk), payer: b.payer, bill: b.id,
+      ...(b.prop ? { prop: b.prop } : {}),
+      ...(srcOf(b) ? { src: b.src, rate: b.rate } : {}),
     },
   });
   haptic();
-  toast(`${b.name} marked paid`);
+  toast(`${b.name} marked paid for ${monthName(mk)}`);
   render();
   sync();
 }
@@ -1738,11 +1756,11 @@ function applyCategory(txnId, cat, msg) {
 
 /* ── bill editor ── */
 
-function openBillSheet(billId) {
+function openBillSheet(billId, mk = S.month) {
   const { txns, bills } = reduceLog();
   const b = billId ? bills.find(x => x.id === billId) : null;
   const dp = ZERO_DP.has(S.cfg.cur) ? 0 : 2;
-  const st = b ? billStatus(b, txns, S.month) : null;
+  const st = b ? billStatus(b, txns, mk) : null;
   const bSrc = b ? srcOf(b) : null;
   // a bill belonging to the flat may genuinely be billed in the flat's currency
   const bDual = propCur() !== S.cfg.cur &&
@@ -1750,7 +1768,7 @@ function openBillSheet(billId) {
 
   $('#sheetBody').innerHTML = `
     <h3 class="sheet-title">${b ? 'Edit bill' : 'New monthly bill'}</h3>
-    <p class="sheet-sub">${b ? dueLabel(st) + ' · ' + monthName(S.month) : 'Repeats every month'}</p>
+    <p class="sheet-sub">${b ? dueLabel(st) + ' · ' + monthName(mk) : 'Repeats every month'}</p>
     <div class="card">
       <label class="field"><span>Name</span><input id="bName" type="text" value="${b ? escapeHtml(b.name) : ''}" placeholder="e.g. Internet" autocapitalize="words"></label>
       <label class="field"><span>Amount (<span id="bCurLbl">${escapeHtml(bSrc ? bSrc.cur : S.cfg.cur)}</span>)</span><input id="bAmt" type="number" inputmode="decimal" step="any" value="${b ? (bSrc ? (ZERO_DP.has(bSrc.cur) ? bSrc.amt : bSrc.amt / 100).toFixed(ZERO_DP.has(bSrc.cur) ? 0 : 2) : (ZERO_DP.has(S.cfg.cur) ? b.amt : b.amt / 100).toFixed(dp)) : ''}" placeholder="0"></label>
@@ -1770,7 +1788,7 @@ function openBillSheet(billId) {
         <option value="uptown"${b && (b.prop === 'uptown' || (b.prop !== 'no' && UPTOWN_AUTO.test(b.name))) ? ' selected' : ''}>🏘️ Uptown flat</option>
       </select></label>
     </div>
-    ${b && st.state !== 'paid' ? '<button id="bPay" class="btn btn-primary">Mark paid for ' + escapeHtml(monthName(S.month)) + '</button><div style="height:10px"></div>' : ''}
+    ${b && st.state !== 'paid' ? '<button id="bPay" class="btn btn-primary">Mark paid for ' + escapeHtml(monthName(mk)) + '</button><div style="height:10px"></div>' : ''}
     ${b && st.state === 'paid' ? '<button id="bUnpay" class="btn btn-secondary">Undo this month\'s payment</button><div style="height:10px"></div>' : ''}
     <button id="bSave" class="btn ${b && st.state !== 'paid' ? 'btn-secondary' : 'btn-primary'}">${b ? 'Save changes' : 'Add bill'}</button>
     ${b ? '<div style="height:10px"></div><button id="bDel" class="btn btn-danger">Delete bill</button>' : ''}
@@ -1834,7 +1852,7 @@ function openBillSheet(billId) {
     closeSheet(); toast(b ? 'Bill updated' : 'Bill added'); render(); sync();
   };
 
-  if ($('#bPay'))   $('#bPay').onclick = () => { closeSheet(); markBillPaid(b.id); };
+  if ($('#bPay'))   $('#bPay').onclick = () => { closeSheet(); markBillPaid(b.id, mk); };
   if ($('#bUnpay')) $('#bUnpay').onclick = () => {
     appendEvent({ k: 'del', x: st.txn.id });
     closeSheet(); toast('Payment undone'); render(); sync();
@@ -2326,17 +2344,21 @@ function wireEvents() {
   });
   $('#v-uptown').addEventListener('click', e => {
     const t = e.target.closest('[data-txn]'); if (t) { openSheet(t.dataset.txn); return; }
-    const b = e.target.closest('[data-bill]'); if (b) openBillSheet(b.dataset.bill);
+    const b = e.target.closest('[data-bill]');
+    if (b) openBillSheet(b.dataset.bill, S.upMonth || monthKey(todayISO()));
   });
 
   // bills
   $('#billAdd').addEventListener('click', () => openBillSheet(null));
   $('#billPaste').addEventListener('click', openPasteSheet);
   $('#billList').addEventListener('click', e => {
-    const b = e.target.closest('[data-bill]'); if (b) openBillSheet(b.dataset.bill);
+    const b = e.target.closest('[data-bill]'); if (b) openBillSheet(b.dataset.bill, S.month);
   });
+  $('#billPrev').addEventListener('click', () => { S.month = shiftMonth(S.month, -1); renderBills(); renderHome(); });
+  $('#billNext').addEventListener('click', () => { S.month = shiftMonth(S.month, 1); renderBills(); renderHome(); });
+  // the Home card is about what is due now, so it always pays the current month
   $('#dueList').addEventListener('click', e => {
-    const b = e.target.closest('[data-pay]'); if (b) markBillPaid(b.dataset.pay);
+    const b = e.target.closest('[data-pay]'); if (b) markBillPaid(b.dataset.pay, monthKey(todayISO()));
   });
 
   // history

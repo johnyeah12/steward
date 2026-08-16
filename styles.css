@@ -192,6 +192,12 @@ button { background: none; border: 0; cursor: pointer; }
 .hdr-ghost { width: 56px; visibility: hidden; }
 .chev { font-size: 26px; color: var(--tint); line-height: 1; padding: 0 10px; }
 
+.month-nav { justify-content: center; gap: 4px; margin-top: 4px; }
+.month-label {
+  font-size: 14px; font-weight: 600; color: var(--txt-2);
+  min-width: 116px; text-align: center;
+}
+
 .sync-pill {
   margin: 8px auto 0; width: fit-content;
   font-size: 12px; font-weight: 500;

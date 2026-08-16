@@ -200,8 +200,13 @@
     <header class="hdr">
       <div class="hdr-row">
         <button id="billPaste" class="hdr-btn">Paste</button>
-        <h2 class="hdr-title">Monthly bills</h2>
+        <h2 id="billTitle" class="hdr-title">Monthly bills</h2>
         <button id="billAdd" class="hdr-btn hdr-btn-strong">＋</button>
+      </div>
+      <div class="hdr-row month-nav">
+        <button id="billPrev" class="chev" aria-label="Previous month">‹</button>
+        <span id="billMonth" class="month-label"></span>
+        <button id="billNext" class="chev" aria-label="Next month">›</button>
       </div>
     </header>
     <div class="scroll">
